@@ -1334,17 +1334,26 @@ def calculate_historical_performance(positions):
             spy_data = yf.download('SPY', start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
             data['SPY'] = spy_data
 
-        # Calculate daily returns
-        returns = data.pct_change().dropna()
+        # Forward fill missing data so newer symbols don't truncate older ones
+        # This allows the portfolio to use available data for each symbol
+        data = data.ffill().bfill()
+
+        # Calculate daily returns - don't drop all NaN rows, handle per-symbol
+        returns = data.pct_change()
+
+        # Drop only the first row (which is NaN due to pct_change)
+        returns = returns.iloc[1:]
 
         if returns.empty:
             return {'returns': {}, 'chart_data': None}
 
         # Calculate portfolio returns (weighted)
+        # Fill any remaining NaN with 0 (no return for that day)
         portfolio_returns = pd.Series(0.0, index=returns.index)
         for symbol, weight in weights.items():
             if symbol in returns.columns:
-                portfolio_returns += returns[symbol] * weight
+                symbol_returns = returns[symbol].fillna(0)
+                portfolio_returns += symbol_returns * weight
         # Cash portion earns ~5% annual (approximate money market rate)
         if cash_weight > 0:
             daily_cash_return = (1.05 ** (1/252)) - 1
