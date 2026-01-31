@@ -1093,7 +1093,7 @@ def register():
         db.session.commit()
 
         # Generate JWT token
-        access_token = create_access_token(identity=user.id)
+        access_token = create_access_token(identity=str(user.id))
 
         return jsonify({
             'message': 'Account created successfully',
@@ -1132,7 +1132,7 @@ def login():
             return jsonify({'error': 'Invalid email or password'}), 401
 
         # Generate JWT token
-        access_token = create_access_token(identity=user.id)
+        access_token = create_access_token(identity=str(user.id))
 
         return jsonify({
             'message': 'Login successful',
@@ -1149,7 +1149,7 @@ def login():
 def get_current_user():
     """Get the current authenticated user."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         user = User.query.get(user_id)
 
         if not user:
@@ -1170,7 +1170,7 @@ def get_current_user():
 def list_portfolios():
     """List all portfolios for the current user."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
 
         portfolios = Portfolio.query.filter_by(user_id=user_id)\
             .order_by(Portfolio.updated_at.desc())\
@@ -1190,7 +1190,7 @@ def list_portfolios():
 def create_portfolio():
     """Save a new portfolio."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         data = request.get_json()
 
         if not data:
@@ -1232,7 +1232,7 @@ def create_portfolio():
 def get_portfolio(portfolio_id):
     """Get a specific portfolio by ID."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
 
         portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=user_id).first()
 
@@ -1250,7 +1250,7 @@ def get_portfolio(portfolio_id):
 def update_portfolio(portfolio_id):
     """Update a portfolio."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         data = request.get_json()
 
         if not data:
@@ -1292,7 +1292,7 @@ def update_portfolio(portfolio_id):
 def delete_portfolio(portfolio_id):
     """Delete a portfolio."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
 
         portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=user_id).first()
 
@@ -1330,7 +1330,7 @@ def create_link_token():
         if not plaid_client.is_configured():
             return jsonify({'error': 'Plaid is not configured'}), 503
 
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         data = request.get_json() or {}
         redirect_uri = data.get('redirect_uri')
 
@@ -1353,7 +1353,7 @@ def exchange_plaid_token():
         if not plaid_client.is_configured():
             return jsonify({'error': 'Plaid is not configured'}), 503
 
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         data = request.get_json()
 
         if not data or 'public_token' not in data:
@@ -1397,7 +1397,7 @@ def exchange_plaid_token():
 def list_plaid_connections():
     """List all Plaid connections for the current user."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
 
         connections = PlaidConnection.query.filter_by(user_id=user_id)\
             .order_by(PlaidConnection.created_at.desc())\
@@ -1420,7 +1420,7 @@ def sync_plaid_connection(connection_id):
         if not plaid_client.is_configured():
             return jsonify({'error': 'Plaid is not configured'}), 503
 
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
 
         connection = PlaidConnection.query.filter_by(
             id=connection_id, user_id=user_id
@@ -1458,7 +1458,7 @@ def sync_plaid_connection(connection_id):
 def delete_plaid_connection(connection_id):
     """Disconnect a Plaid account."""
     try:
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
 
         connection = PlaidConnection.query.filter_by(
             id=connection_id, user_id=user_id
@@ -2091,7 +2091,7 @@ def compare_portfolios():
                 return portfolio_input['positions']
             elif 'id' in portfolio_input:
                 # Load from database
-                user_id = get_jwt_identity()
+                user_id = int(get_jwt_identity())
                 if not user_id:
                     raise ValueError('Authentication required to load saved portfolios')
                 portfolio = Portfolio.query.filter_by(id=portfolio_input['id'], user_id=user_id).first()
@@ -2207,7 +2207,7 @@ def what_if_analysis():
         if 'positions' in data:
             base_positions = data['positions']
         elif 'base_portfolio_id' in data:
-            user_id = get_jwt_identity()
+            user_id = int(get_jwt_identity())
             if not user_id:
                 return jsonify({'error': 'Authentication required to load saved portfolios'}), 401
             portfolio = Portfolio.query.filter_by(id=data['base_portfolio_id'], user_id=user_id).first()
