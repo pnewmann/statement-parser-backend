@@ -35,14 +35,33 @@ EXCLUDED_WORDS = {
     'EL', 'TX', 'CA', 'NY', 'FL', 'CO', 'AZ', 'NC', 'VA', 'WA', 'MA', 'PA',
 }
 
-# Known ETF/Stock symbols
+# Known ETF/Stock symbols - comprehensive list
 KNOWN_SYMBOLS = {
+    # Bond ETFs
     'SGOV', 'AGG', 'BND', 'BNDX', 'VTIP', 'STIP', 'TIP', 'TIPS', 'SCHZ', 'SCHP',
-    'VTI', 'VOO', 'SPY', 'QQQ', 'IVV', 'VEA', 'VWO', 'IEFA', 'IEMG', 'VIG',
+    'EMB', 'VWOB', 'LQD', 'HYG', 'JNK', 'MUB', 'TLT', 'IEF', 'SHY', 'GOVT',
+    'VCIT', 'VCSH', 'BSV', 'BIV', 'BLV', 'VMBS', 'MBB', 'IGIB', 'IGSB',
+    # US Equity ETFs
+    'VTI', 'VOO', 'SPY', 'QQQ', 'IVV', 'IWM', 'IWF', 'IWD', 'VIG', 'VYM',
     'SCHD', 'SCHA', 'SCHB', 'SCHF', 'SCHE', 'SCHX', 'SCHY', 'SCHG', 'SCHV',
+    'SPMD', 'SPSM', 'SPYM', 'SPLG', 'SPTM', 'SPYG', 'SPYV',
+    'VB', 'VV', 'VO', 'VBR', 'VBK', 'VOE', 'VOT', 'VTV', 'VUG', 'MGK', 'MGV',
+    'ITOT', 'IXUS', 'IJH', 'IJR', 'IWB', 'IWR', 'IWS', 'IWN', 'IWO', 'IWP',
+    # International ETFs
+    'VEA', 'VWO', 'IEFA', 'IEMG', 'EFA', 'EEM', 'VXUS', 'VEU', 'VSS', 'VGK',
+    'IXUS', 'ACWI', 'ACWX', 'VPL', 'EWJ', 'EWZ', 'EWY', 'EWT', 'MCHI', 'FXI',
+    # Crypto ETFs
+    'IBIT', 'ETHA', 'GBTC', 'FBTC', 'ARKB', 'BITB', 'HODL', 'BRRR', 'EZBC',
+    'BTCO', 'BTCW', 'DEFI', 'ETHE',
+    # Sector ETFs
+    'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLY', 'XLP', 'XLU', 'XLB', 'XLRE',
+    'VGT', 'VFH', 'VDE', 'VHT', 'VIS', 'VCR', 'VDC', 'VPU', 'VAW', 'VNQ',
+    # Individual stocks
     'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK',
     'JPM', 'JNJ', 'V', 'PG', 'UNH', 'HD', 'MA', 'DIS', 'PYPL', 'BAC', 'VZ',
     'ADBE', 'NFLX', 'CRM', 'PFE', 'TMO', 'PEP', 'AVGO', 'CSCO', 'ACN',
+    'WMT', 'KO', 'MRK', 'ABT', 'CVX', 'XOM', 'LLY', 'ABBV', 'ORCL', 'AMD',
+    'INTC', 'QCOM', 'TXN', 'IBM', 'GE', 'CAT', 'BA', 'MMM', 'HON', 'UPS',
 }
 
 
@@ -140,31 +159,39 @@ def parse_schwab_pdf(pdf):
             # Skip header lines
             if 'Symbol' in line and 'Description' in line:
                 continue
-            if 'Total' in line and 'Exchange' in line:
+            if 'Total' in line and ('Exchange' in line or 'Traded' in line):
                 continue
 
-            # Try to extract position data
-            # Look for known symbols at the start of the line
+            # Try to match position line pattern
+            # Format: SYMBOL DESCRIPTION, QUANTITY PRICE MARKETVALUE ...
+            # Example: AGG ISHARESCOREUS, 111.0000 99.88000 11,086.68
+
+            # First, try to match a line starting with a known symbol
+            matched = False
             for symbol in KNOWN_SYMBOLS:
-                if line.startswith(symbol + ' ') or line.startswith(symbol + '\t'):
-                    # Found a position line
+                if line.startswith(symbol + ' '):
+                    matched = True
                     # Extract all numbers from the line
                     numbers = re.findall(r'[\d,]+\.[\d]+', line)
 
                     if len(numbers) >= 3:
-                        # Schwab format: Quantity, Price, Market Value, Cost Basis, ...
                         quantity = clean_number(numbers[0])
                         price = clean_number(numbers[1])
                         market_value = clean_number(numbers[2])
 
-                        # Extract description (text between symbol and first number)
-                        desc_match = re.match(rf'^{symbol}\s+([A-Za-z0-9\-\s]+)', line)
-                        description = ""
-                        if desc_match:
-                            description = desc_match.group(1).strip()
-                            # Clean up description - remove special chars and compress
-                            description = re.sub(r'[^\w\s\-]', '', description)
-                            description = ' '.join(description.split())
+                        # Extract description: everything between symbol and first number
+                        # Find where the first number starts
+                        first_num_match = re.search(r'[\d,]+\.[\d]+', line)
+                        if first_num_match:
+                            desc_end = first_num_match.start()
+                            description = line[len(symbol):desc_end].strip()
+                            # Clean up: remove special chars, trailing commas
+                            description = re.sub(r'[,◊\(\)]', '', description).strip()
+                            # Add spaces to camelCase (ISHARESCOREUS -> ISHARES CORE US)
+                            description = re.sub(r'([a-z])([A-Z])', r'\1 \2', description)
+                            description = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', description)
+                        else:
+                            description = ''
 
                         position = {
                             'symbol': symbol,
@@ -174,32 +201,42 @@ def parse_schwab_pdf(pdf):
                             'value': round(market_value, 2) if market_value else None
                         }
 
-                        # Only add if not already present
                         if not any(p['symbol'] == symbol for p in positions):
                             positions.append(position)
                     break
 
-            # Also try generic pattern for symbols we don't know
-            else:
-                # Match: 3-5 letter symbol followed by text and numbers
-                match = re.match(r'^([A-Z]{3,5})\s+\S+.*?([\d,]+\.\d{4})\s+([\d,]+\.\d{5})\s+([\d,]+\.\d{2})', line)
+            # If no known symbol matched, try generic pattern
+            if not matched:
+                # Match: 3-5 letter symbol at start, followed by description and numbers
+                match = re.match(r'^([A-Z]{2,5})\s+([A-Za-z0-9\-]+)', line)
                 if match:
                     symbol = match.group(1)
                     if is_valid_symbol(symbol):
-                        quantity = clean_number(match.group(2))
-                        price = clean_number(match.group(3))
-                        market_value = clean_number(match.group(4))
+                        numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                        if len(numbers) >= 3:
+                            quantity = clean_number(numbers[0])
+                            price = clean_number(numbers[1])
+                            market_value = clean_number(numbers[2])
 
-                        position = {
-                            'symbol': symbol,
-                            'description': '',
-                            'shares': round(quantity, 4) if quantity else None,
-                            'price': round(price, 2) if price else None,
-                            'value': round(market_value, 2) if market_value else None
-                        }
+                            # Extract description
+                            first_num_match = re.search(r'[\d,]+\.[\d]+', line)
+                            if first_num_match:
+                                desc_end = first_num_match.start()
+                                description = line[len(symbol):desc_end].strip()
+                                description = re.sub(r'[,◊\(\)]', '', description).strip()
+                            else:
+                                description = ''
 
-                        if not any(p['symbol'] == symbol for p in positions):
-                            positions.append(position)
+                            position = {
+                                'symbol': symbol,
+                                'description': description,
+                                'shares': round(quantity, 4) if quantity else None,
+                                'price': round(price, 2) if price else None,
+                                'value': round(market_value, 2) if market_value else None
+                            }
+
+                            if not any(p['symbol'] == symbol for p in positions):
+                                positions.append(position)
 
         # Parse cash positions
         if in_cash_section:
