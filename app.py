@@ -1,17 +1,516 @@
 """
 Brokerage Statement Parser API
 Extracts positions from Schwab, Fidelity, and other brokerage statements.
+Provides portfolio analytics including asset allocation, sector exposure, and risk metrics.
 """
 
 import io
 import csv
 import re
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pdfplumber
+import numpy as np
+
+# Try to import yfinance and pandas for risk metrics
+try:
+    import yfinance as yf
+    import pandas as pd
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    pd = None
 
 app = Flask(__name__)
 CORS(app)
+
+# =============================================================================
+# ETF/STOCK CLASSIFICATION DATABASE
+# Maps symbols to asset class, sector, and geography
+# =============================================================================
+
+ETF_CLASSIFICATIONS = {
+    # =========================================================================
+    # US TREASURY / GOVERNMENT BOND ETFs
+    # =========================================================================
+    'SGOV': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'BIL': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'SHV': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'SHY': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'IEI': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'IEF': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'TLH': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'TLT': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'EDV': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'GOVT': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'VGSH': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'VGIT': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'VGLT': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'SCHO': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'SCHR': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+    'SCHQ': {'asset_class': 'Bonds', 'sub_class': 'US Treasury', 'sector': 'Government', 'geography': 'US'},
+
+    # TIPS (Inflation Protected)
+    'TIP': {'asset_class': 'Bonds', 'sub_class': 'TIPS', 'sector': 'Government', 'geography': 'US'},
+    'VTIP': {'asset_class': 'Bonds', 'sub_class': 'TIPS', 'sector': 'Government', 'geography': 'US'},
+    'STIP': {'asset_class': 'Bonds', 'sub_class': 'TIPS', 'sector': 'Government', 'geography': 'US'},
+    'SCHP': {'asset_class': 'Bonds', 'sub_class': 'TIPS', 'sector': 'Government', 'geography': 'US'},
+
+    # =========================================================================
+    # US AGGREGATE / TOTAL BOND MARKET ETFs
+    # =========================================================================
+    'AGG': {'asset_class': 'Bonds', 'sub_class': 'US Aggregate', 'sector': 'Broad Market', 'geography': 'US'},
+    'BND': {'asset_class': 'Bonds', 'sub_class': 'US Aggregate', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHZ': {'asset_class': 'Bonds', 'sub_class': 'US Aggregate', 'sector': 'Broad Market', 'geography': 'US'},
+    'FBND': {'asset_class': 'Bonds', 'sub_class': 'US Aggregate', 'sector': 'Broad Market', 'geography': 'US'},
+    'IUSB': {'asset_class': 'Bonds', 'sub_class': 'US Aggregate', 'sector': 'Broad Market', 'geography': 'US'},
+    'BSV': {'asset_class': 'Bonds', 'sub_class': 'Short-Term Bond', 'sector': 'Broad Market', 'geography': 'US'},
+    'BIV': {'asset_class': 'Bonds', 'sub_class': 'Intermediate Bond', 'sector': 'Broad Market', 'geography': 'US'},
+    'BLV': {'asset_class': 'Bonds', 'sub_class': 'Long-Term Bond', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # =========================================================================
+    # CORPORATE BOND ETFs
+    # =========================================================================
+    'LQD': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'VCIT': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'VCSH': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'VCLT': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'IGIB': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'IGSB': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'IGLB': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+    'SCHI': {'asset_class': 'Bonds', 'sub_class': 'Investment Grade Corp', 'sector': 'Corporate', 'geography': 'US'},
+
+    # High Yield
+    'HYG': {'asset_class': 'Bonds', 'sub_class': 'High Yield', 'sector': 'Corporate', 'geography': 'US'},
+    'JNK': {'asset_class': 'Bonds', 'sub_class': 'High Yield', 'sector': 'Corporate', 'geography': 'US'},
+    'SHYG': {'asset_class': 'Bonds', 'sub_class': 'High Yield', 'sector': 'Corporate', 'geography': 'US'},
+    'USHY': {'asset_class': 'Bonds', 'sub_class': 'High Yield', 'sector': 'Corporate', 'geography': 'US'},
+
+    # =========================================================================
+    # MUNICIPAL BOND ETFs
+    # =========================================================================
+    'MUB': {'asset_class': 'Bonds', 'sub_class': 'Municipal', 'sector': 'Municipal', 'geography': 'US'},
+    'VTEB': {'asset_class': 'Bonds', 'sub_class': 'Municipal', 'sector': 'Municipal', 'geography': 'US'},
+    'TFI': {'asset_class': 'Bonds', 'sub_class': 'Municipal', 'sector': 'Municipal', 'geography': 'US'},
+    'SUB': {'asset_class': 'Bonds', 'sub_class': 'Municipal', 'sector': 'Municipal', 'geography': 'US'},
+    'SHM': {'asset_class': 'Bonds', 'sub_class': 'Municipal', 'sector': 'Municipal', 'geography': 'US'},
+    'SCMB': {'asset_class': 'Bonds', 'sub_class': 'Municipal', 'sector': 'Municipal', 'geography': 'US'},
+
+    # =========================================================================
+    # MORTGAGE-BACKED SECURITIES ETFs
+    # =========================================================================
+    'MBB': {'asset_class': 'Bonds', 'sub_class': 'Mortgage-Backed', 'sector': 'Securitized', 'geography': 'US'},
+    'VMBS': {'asset_class': 'Bonds', 'sub_class': 'Mortgage-Backed', 'sector': 'Securitized', 'geography': 'US'},
+    'SPMB': {'asset_class': 'Bonds', 'sub_class': 'Mortgage-Backed', 'sector': 'Securitized', 'geography': 'US'},
+
+    # =========================================================================
+    # INTERNATIONAL BOND ETFs
+    # =========================================================================
+    'BNDX': {'asset_class': 'Bonds', 'sub_class': 'International Developed', 'sector': 'Broad Market', 'geography': 'International'},
+    'IAGG': {'asset_class': 'Bonds', 'sub_class': 'International Aggregate', 'sector': 'Broad Market', 'geography': 'International'},
+    'BWX': {'asset_class': 'Bonds', 'sub_class': 'International Treasury', 'sector': 'Government', 'geography': 'International'},
+
+    # Emerging Markets Bonds
+    'EMB': {'asset_class': 'Bonds', 'sub_class': 'Emerging Markets', 'sector': 'Government', 'geography': 'Emerging Markets'},
+    'VWOB': {'asset_class': 'Bonds', 'sub_class': 'Emerging Markets', 'sector': 'Government', 'geography': 'Emerging Markets'},
+    'PCY': {'asset_class': 'Bonds', 'sub_class': 'Emerging Markets', 'sector': 'Government', 'geography': 'Emerging Markets'},
+
+    # =========================================================================
+    # US TOTAL MARKET STOCK ETFs
+    # =========================================================================
+    'VTI': {'asset_class': 'Stocks', 'sub_class': 'US Total Market', 'sector': 'Broad Market', 'geography': 'US'},
+    'ITOT': {'asset_class': 'Stocks', 'sub_class': 'US Total Market', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHB': {'asset_class': 'Stocks', 'sub_class': 'US Total Market', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPTM': {'asset_class': 'Stocks', 'sub_class': 'US Total Market', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWV': {'asset_class': 'Stocks', 'sub_class': 'US Total Market', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # =========================================================================
+    # US LARGE CAP ETFs
+    # =========================================================================
+    'SPY': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'VOO': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'IVV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPLG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'VV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWB': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'MGC': {'asset_class': 'Stocks', 'sub_class': 'US Mega Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'OEF': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # Large Cap Growth
+    'QQQ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Technology', 'geography': 'US'},
+    'QQQM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Technology', 'geography': 'US'},
+    'VUG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWF': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPYG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'VOOG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'MGK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'IVW': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'IUSG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # Large Cap Value
+    'VTV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWD': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPYV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'VOOV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'MGV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'IVE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'IUSV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'RPV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # =========================================================================
+    # US MID CAP ETFs
+    # =========================================================================
+    'VO': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'IJH': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHM': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWR': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPMD': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'MDY': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'VOT': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'VOE': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWP': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWS': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # =========================================================================
+    # US SMALL CAP ETFs
+    # =========================================================================
+    'VB': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'IJR': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWM': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHA': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPSM': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'SLY': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+    'VBK': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'VBR': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWO': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'IWN': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap Value', 'sector': 'Broad Market', 'geography': 'US'},
+    'VIOO': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Broad Market', 'geography': 'US'},
+
+    # =========================================================================
+    # US DIVIDEND ETFs
+    # =========================================================================
+    'VIG': {'asset_class': 'Stocks', 'sub_class': 'US Dividend Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'VYM': {'asset_class': 'Stocks', 'sub_class': 'US High Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHD': {'asset_class': 'Stocks', 'sub_class': 'US Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'DVY': {'asset_class': 'Stocks', 'sub_class': 'US High Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'SDY': {'asset_class': 'Stocks', 'sub_class': 'US Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'DGRO': {'asset_class': 'Stocks', 'sub_class': 'US Dividend Growth', 'sector': 'Broad Market', 'geography': 'US'},
+    'NOBL': {'asset_class': 'Stocks', 'sub_class': 'US Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'SPYD': {'asset_class': 'Stocks', 'sub_class': 'US High Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'HDV': {'asset_class': 'Stocks', 'sub_class': 'US High Dividend', 'sector': 'Broad Market', 'geography': 'US'},
+    'SCHY': {'asset_class': 'Stocks', 'sub_class': 'International Dividend', 'sector': 'Broad Market', 'geography': 'International'},
+
+    # =========================================================================
+    # INTERNATIONAL DEVELOPED MARKET ETFs
+    # =========================================================================
+    'VEA': {'asset_class': 'Stocks', 'sub_class': 'International Developed', 'sector': 'Broad Market', 'geography': 'Developed Markets'},
+    'IEFA': {'asset_class': 'Stocks', 'sub_class': 'International Developed', 'sector': 'Broad Market', 'geography': 'Developed Markets'},
+    'EFA': {'asset_class': 'Stocks', 'sub_class': 'International Developed', 'sector': 'Broad Market', 'geography': 'Developed Markets'},
+    'SCHF': {'asset_class': 'Stocks', 'sub_class': 'International Developed', 'sector': 'Broad Market', 'geography': 'Developed Markets'},
+    'SPDW': {'asset_class': 'Stocks', 'sub_class': 'International Developed', 'sector': 'Broad Market', 'geography': 'Developed Markets'},
+    'VGK': {'asset_class': 'Stocks', 'sub_class': 'Europe', 'sector': 'Broad Market', 'geography': 'Europe'},
+    'VPL': {'asset_class': 'Stocks', 'sub_class': 'Pacific', 'sector': 'Broad Market', 'geography': 'Asia Pacific'},
+    'EWJ': {'asset_class': 'Stocks', 'sub_class': 'Japan', 'sector': 'Broad Market', 'geography': 'Japan'},
+    'EWG': {'asset_class': 'Stocks', 'sub_class': 'Germany', 'sector': 'Broad Market', 'geography': 'Europe'},
+    'EWU': {'asset_class': 'Stocks', 'sub_class': 'UK', 'sector': 'Broad Market', 'geography': 'Europe'},
+    'EWC': {'asset_class': 'Stocks', 'sub_class': 'Canada', 'sector': 'Broad Market', 'geography': 'North America'},
+    'EWA': {'asset_class': 'Stocks', 'sub_class': 'Australia', 'sector': 'Broad Market', 'geography': 'Asia Pacific'},
+    'IEUR': {'asset_class': 'Stocks', 'sub_class': 'Europe', 'sector': 'Broad Market', 'geography': 'Europe'},
+    'IPAC': {'asset_class': 'Stocks', 'sub_class': 'Pacific', 'sector': 'Broad Market', 'geography': 'Asia Pacific'},
+
+    # =========================================================================
+    # EMERGING MARKETS ETFs
+    # =========================================================================
+    'VWO': {'asset_class': 'Stocks', 'sub_class': 'Emerging Markets', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+    'IEMG': {'asset_class': 'Stocks', 'sub_class': 'Emerging Markets', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+    'EEM': {'asset_class': 'Stocks', 'sub_class': 'Emerging Markets', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+    'SCHE': {'asset_class': 'Stocks', 'sub_class': 'Emerging Markets', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+    'SPEM': {'asset_class': 'Stocks', 'sub_class': 'Emerging Markets', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+    'MCHI': {'asset_class': 'Stocks', 'sub_class': 'China', 'sector': 'Broad Market', 'geography': 'China'},
+    'FXI': {'asset_class': 'Stocks', 'sub_class': 'China', 'sector': 'Broad Market', 'geography': 'China'},
+    'KWEB': {'asset_class': 'Stocks', 'sub_class': 'China', 'sector': 'Technology', 'geography': 'China'},
+    'EWZ': {'asset_class': 'Stocks', 'sub_class': 'Brazil', 'sector': 'Broad Market', 'geography': 'Latin America'},
+    'EWT': {'asset_class': 'Stocks', 'sub_class': 'Taiwan', 'sector': 'Broad Market', 'geography': 'Asia Pacific'},
+    'EWY': {'asset_class': 'Stocks', 'sub_class': 'South Korea', 'sector': 'Broad Market', 'geography': 'Asia Pacific'},
+    'INDA': {'asset_class': 'Stocks', 'sub_class': 'India', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+    'EPI': {'asset_class': 'Stocks', 'sub_class': 'India', 'sector': 'Broad Market', 'geography': 'Emerging Markets'},
+
+    # =========================================================================
+    # TOTAL WORLD / GLOBAL ETFs
+    # =========================================================================
+    'VT': {'asset_class': 'Stocks', 'sub_class': 'Global', 'sector': 'Broad Market', 'geography': 'Global'},
+    'ACWI': {'asset_class': 'Stocks', 'sub_class': 'Global', 'sector': 'Broad Market', 'geography': 'Global'},
+    'URTH': {'asset_class': 'Stocks', 'sub_class': 'Global', 'sector': 'Broad Market', 'geography': 'Global'},
+    'VXUS': {'asset_class': 'Stocks', 'sub_class': 'International Total', 'sector': 'Broad Market', 'geography': 'International'},
+    'IXUS': {'asset_class': 'Stocks', 'sub_class': 'International Total', 'sector': 'Broad Market', 'geography': 'International'},
+    'VEU': {'asset_class': 'Stocks', 'sub_class': 'International Total', 'sector': 'Broad Market', 'geography': 'International'},
+    'VSS': {'asset_class': 'Stocks', 'sub_class': 'International Small Cap', 'sector': 'Broad Market', 'geography': 'International'},
+    'ACWX': {'asset_class': 'Stocks', 'sub_class': 'International Total', 'sector': 'Broad Market', 'geography': 'International'},
+
+    # =========================================================================
+    # US SECTOR ETFs - TECHNOLOGY
+    # =========================================================================
+    'XLK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'VGT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'IYW': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'FTEC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'IGV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'SOXX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'SMH': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'ARKK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Technology', 'geography': 'US'},
+    'ARKW': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Technology', 'geography': 'US'},
+    'ROBO': {'asset_class': 'Stocks', 'sub_class': 'Global', 'sector': 'Technology', 'geography': 'Global'},
+    'BOTZ': {'asset_class': 'Stocks', 'sub_class': 'Global', 'sector': 'Technology', 'geography': 'Global'},
+
+    # =========================================================================
+    # US SECTOR ETFs - HEALTHCARE
+    # =========================================================================
+    'XLV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'VHT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'IYH': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'FHLC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'IBB': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'XBI': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'IHI': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'ARKG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap Growth', 'sector': 'Healthcare', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - FINANCIALS
+    # =========================================================================
+    'XLF': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'VFH': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'IYF': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'FNCL': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'KRE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'KBE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'IAI': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - ENERGY
+    # =========================================================================
+    'XLE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'VDE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'IYE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'FENY': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'OIH': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'XOP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'AMLP': {'asset_class': 'Stocks', 'sub_class': 'MLPs', 'sector': 'Energy', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - CONSUMER
+    # =========================================================================
+    'XLY': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'VCR': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'IYC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'FDIS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'XLP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'VDC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'IYK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'FSTA': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - INDUSTRIALS
+    # =========================================================================
+    'XLI': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'VIS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'IYJ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'FIDU': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'ITA': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'XAR': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - UTILITIES
+    # =========================================================================
+    'XLU': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+    'VPU': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+    'IDU': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+    'FUTY': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - MATERIALS
+    # =========================================================================
+    'XLB': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Materials', 'geography': 'US'},
+    'VAW': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Materials', 'geography': 'US'},
+    'IYM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Materials', 'geography': 'US'},
+    'FMAT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Materials', 'geography': 'US'},
+
+    # =========================================================================
+    # US SECTOR ETFs - COMMUNICATION SERVICES
+    # =========================================================================
+    'XLC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'VOX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'IYZ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'FCOM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+
+    # =========================================================================
+    # REAL ESTATE ETFs
+    # =========================================================================
+    'VNQ': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'XLRE': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'IYR': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'SCHH': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'FREL': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'RWR': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'USRT': {'asset_class': 'Real Estate', 'sub_class': 'US REITs', 'sector': 'Real Estate', 'geography': 'US'},
+    'VNQI': {'asset_class': 'Real Estate', 'sub_class': 'International REITs', 'sector': 'Real Estate', 'geography': 'International'},
+    'RWX': {'asset_class': 'Real Estate', 'sub_class': 'International REITs', 'sector': 'Real Estate', 'geography': 'International'},
+    'IFGL': {'asset_class': 'Real Estate', 'sub_class': 'International REITs', 'sector': 'Real Estate', 'geography': 'International'},
+
+    # =========================================================================
+    # CRYPTOCURRENCY ETFs
+    # =========================================================================
+    'IBIT': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'FBTC': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'GBTC': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'ARKB': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'BITB': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'BTCO': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'BTCW': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'HODL': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'BRRR': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'EZBC': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'DEFI': {'asset_class': 'Crypto', 'sub_class': 'DeFi', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'ETHA': {'asset_class': 'Crypto', 'sub_class': 'Ethereum', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'ETHE': {'asset_class': 'Crypto', 'sub_class': 'Ethereum', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+
+    # =========================================================================
+    # COMMODITY ETFs
+    # =========================================================================
+    'GLD': {'asset_class': 'Commodities', 'sub_class': 'Gold', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'IAU': {'asset_class': 'Commodities', 'sub_class': 'Gold', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'GLDM': {'asset_class': 'Commodities', 'sub_class': 'Gold', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'SGOL': {'asset_class': 'Commodities', 'sub_class': 'Gold', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'SLV': {'asset_class': 'Commodities', 'sub_class': 'Silver', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'PPLT': {'asset_class': 'Commodities', 'sub_class': 'Platinum', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'PALL': {'asset_class': 'Commodities', 'sub_class': 'Palladium', 'sector': 'Precious Metals', 'geography': 'Global'},
+    'DBC': {'asset_class': 'Commodities', 'sub_class': 'Broad Commodities', 'sector': 'Commodities', 'geography': 'Global'},
+    'GSG': {'asset_class': 'Commodities', 'sub_class': 'Broad Commodities', 'sector': 'Commodities', 'geography': 'Global'},
+    'PDBC': {'asset_class': 'Commodities', 'sub_class': 'Broad Commodities', 'sector': 'Commodities', 'geography': 'Global'},
+    'USO': {'asset_class': 'Commodities', 'sub_class': 'Oil', 'sector': 'Energy', 'geography': 'Global'},
+    'UNG': {'asset_class': 'Commodities', 'sub_class': 'Natural Gas', 'sector': 'Energy', 'geography': 'Global'},
+    'DBA': {'asset_class': 'Commodities', 'sub_class': 'Agriculture', 'sector': 'Agriculture', 'geography': 'Global'},
+    'CORN': {'asset_class': 'Commodities', 'sub_class': 'Agriculture', 'sector': 'Agriculture', 'geography': 'Global'},
+    'WEAT': {'asset_class': 'Commodities', 'sub_class': 'Agriculture', 'sector': 'Agriculture', 'geography': 'Global'},
+
+    # =========================================================================
+    # CASH / MONEY MARKET
+    # =========================================================================
+    'CASH': {'asset_class': 'Cash', 'sub_class': 'Cash', 'sector': 'Money Market', 'geography': 'US'},
+    'SPAXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'FDRXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'VMFXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'SWVXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+
+    # =========================================================================
+    # MAJOR INDIVIDUAL STOCKS
+    # =========================================================================
+    # Technology
+    'AAPL': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'MSFT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'GOOGL': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'GOOG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'AMZN': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'NVDA': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'META': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'TSLA': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'AVGO': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'ADBE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'CRM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'ORCL': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'CSCO': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'ACN': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'IBM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'INTC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'AMD': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'QCOM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'TXN': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Technology', 'geography': 'US'},
+    'NFLX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'PYPL': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+
+    # Financials
+    'BRK.B': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'BRK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'JPM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'V': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'MA': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'BAC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'WFC': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'GS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'MS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'C': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'AXP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+
+    # Healthcare
+    'UNH': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'JNJ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'LLY': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'PFE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'ABBV': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'MRK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'TMO': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'ABT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'DHR': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+    'BMY': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
+
+    # Consumer
+    'WMT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'PG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'KO': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'PEP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'COST': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Staples', 'geography': 'US'},
+    'HD': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'MCD': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'NKE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'SBUX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'TGT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'LOW': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Consumer Discretionary', 'geography': 'US'},
+    'DIS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+
+    # Energy
+    'XOM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'CVX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'COP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'SLB': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'EOG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+
+    # Industrials
+    'GE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'CAT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'BA': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'HON': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'UPS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'RTX': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'LMT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'MMM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    'DE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+
+    # Telecom / Utilities
+    'VZ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'T': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'TMUS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
+    'NEE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+    'DUK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+    'SO': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Utilities', 'geography': 'US'},
+}
+
+# S&P 500 sector weights for benchmark comparison (approximate)
+SP500_SECTOR_WEIGHTS = {
+    'Technology': 0.29,
+    'Healthcare': 0.13,
+    'Financials': 0.13,
+    'Consumer Discretionary': 0.10,
+    'Communication Services': 0.09,
+    'Industrials': 0.08,
+    'Consumer Staples': 0.06,
+    'Energy': 0.04,
+    'Utilities': 0.03,
+    'Real Estate': 0.02,
+    'Materials': 0.03,
+}
 
 # Common stock/ETF symbols pattern
 SYMBOL_PATTERN = re.compile(r'^[A-Z]{1,5}$')
@@ -541,6 +1040,459 @@ def parse_statement():
 
     except Exception as e:
         return jsonify({'error': f'Error parsing file: {str(e)}'}), 500
+
+
+# =============================================================================
+# PORTFOLIO ANALYTICS
+# =============================================================================
+
+def get_classification(symbol):
+    """Get classification for a symbol, with fallback for unknown symbols."""
+    symbol = symbol.upper().strip()
+
+    if symbol in ETF_CLASSIFICATIONS:
+        return ETF_CLASSIFICATIONS[symbol]
+
+    # Default classification for unknown symbols (assume US stock)
+    return {
+        'asset_class': 'Stocks',
+        'sub_class': 'US Large Cap',
+        'sector': 'Unknown',
+        'geography': 'US'
+    }
+
+
+def calculate_allocations(positions):
+    """Calculate asset allocation, sector exposure, and geographic breakdown."""
+    total_value = sum(p.get('value', 0) or 0 for p in positions)
+
+    if total_value == 0:
+        return {
+            'asset_allocation': {},
+            'sub_class_allocation': {},
+            'sector_exposure': {},
+            'geography': {},
+            'total_value': 0
+        }
+
+    asset_allocation = {}
+    sub_class_allocation = {}
+    sector_exposure = {}
+    geography = {}
+
+    for pos in positions:
+        value = pos.get('value', 0) or 0
+        if value <= 0:
+            continue
+
+        symbol = pos.get('symbol', '')
+        classification = get_classification(symbol)
+
+        asset_class = classification['asset_class']
+        sub_class = classification['sub_class']
+        sector = classification['sector']
+        geo = classification['geography']
+
+        # Aggregate by asset class
+        asset_allocation[asset_class] = asset_allocation.get(asset_class, 0) + value
+
+        # Aggregate by sub-class
+        sub_class_allocation[sub_class] = sub_class_allocation.get(sub_class, 0) + value
+
+        # Aggregate by sector
+        sector_exposure[sector] = sector_exposure.get(sector, 0) + value
+
+        # Aggregate by geography
+        geography[geo] = geography.get(geo, 0) + value
+
+    # Convert to percentages
+    asset_pct = {k: round(v / total_value * 100, 2) for k, v in asset_allocation.items()}
+    sub_class_pct = {k: round(v / total_value * 100, 2) for k, v in sub_class_allocation.items()}
+    sector_pct = {k: round(v / total_value * 100, 2) for k, v in sector_exposure.items()}
+    geo_pct = {k: round(v / total_value * 100, 2) for k, v in geography.items()}
+
+    return {
+        'asset_allocation': asset_pct,
+        'asset_allocation_values': {k: round(v, 2) for k, v in asset_allocation.items()},
+        'sub_class_allocation': sub_class_pct,
+        'sector_exposure': sector_pct,
+        'sector_benchmark': SP500_SECTOR_WEIGHTS,
+        'geography': geo_pct,
+        'total_value': round(total_value, 2)
+    }
+
+
+def calculate_concentration(positions):
+    """Calculate concentration risk - top 10 holdings percentage."""
+    total_value = sum(p.get('value', 0) or 0 for p in positions)
+
+    if total_value == 0:
+        return {'top_10_pct': 0, 'top_10_holdings': []}
+
+    # Sort positions by value descending
+    sorted_positions = sorted(
+        [p for p in positions if (p.get('value', 0) or 0) > 0],
+        key=lambda x: x.get('value', 0) or 0,
+        reverse=True
+    )
+
+    top_10 = sorted_positions[:10]
+    top_10_value = sum(p.get('value', 0) or 0 for p in top_10)
+
+    top_10_holdings = [
+        {
+            'symbol': p.get('symbol', ''),
+            'value': round(p.get('value', 0) or 0, 2),
+            'pct': round((p.get('value', 0) or 0) / total_value * 100, 2)
+        }
+        for p in top_10
+    ]
+
+    return {
+        'top_10_pct': round(top_10_value / total_value * 100, 2),
+        'top_10_holdings': top_10_holdings
+    }
+
+
+def calculate_risk_metrics(positions):
+    """Calculate portfolio risk metrics using historical data."""
+    if not YFINANCE_AVAILABLE:
+        return {
+            'volatility': None,
+            'beta': None,
+            'sharpe_ratio': None,
+            'max_drawdown': None,
+            'error': 'yfinance not available'
+        }
+
+    total_value = sum(p.get('value', 0) or 0 for p in positions)
+    if total_value == 0:
+        return {
+            'volatility': None,
+            'beta': None,
+            'sharpe_ratio': None,
+            'max_drawdown': None
+        }
+
+    # Get symbols with weights
+    weights = {}
+    for pos in positions:
+        symbol = pos.get('symbol', '')
+        value = pos.get('value', 0) or 0
+        if value > 0 and symbol and symbol != 'CASH':
+            weights[symbol] = value / total_value
+
+    if not weights:
+        return {
+            'volatility': None,
+            'beta': None,
+            'sharpe_ratio': None,
+            'max_drawdown': None
+        }
+
+    try:
+        # Get 1 year of historical data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)
+
+        symbols = list(weights.keys())
+
+        # Download price data
+        data = yf.download(
+            symbols + ['SPY'],  # Include SPY for beta calculation
+            start=start_date,
+            end=end_date,
+            progress=False,
+            auto_adjust=True
+        )['Close']
+
+        if data.empty:
+            return {
+                'volatility': None,
+                'beta': None,
+                'sharpe_ratio': None,
+                'max_drawdown': None,
+                'error': 'No price data available'
+            }
+
+        # Handle single symbol case
+        if len(symbols) == 1:
+            data = data.to_frame()
+            data.columns = [symbols[0]]
+
+        # Calculate daily returns
+        returns = data.pct_change().dropna()
+
+        if returns.empty:
+            return {
+                'volatility': None,
+                'beta': None,
+                'sharpe_ratio': None,
+                'max_drawdown': None
+            }
+
+        # Calculate portfolio returns
+        portfolio_returns = pd.Series(0, index=returns.index)
+        for symbol, weight in weights.items():
+            if symbol in returns.columns:
+                portfolio_returns += returns[symbol] * weight
+
+        # Annualized volatility (std dev)
+        volatility = float(portfolio_returns.std() * np.sqrt(252) * 100)
+
+        # Beta vs S&P 500
+        if 'SPY' in returns.columns:
+            covariance = portfolio_returns.cov(returns['SPY'])
+            spy_variance = returns['SPY'].var()
+            beta = float(covariance / spy_variance) if spy_variance > 0 else None
+        else:
+            beta = None
+
+        # Sharpe Ratio (assuming 5% risk-free rate)
+        risk_free_rate = 0.05
+        excess_returns = portfolio_returns.mean() * 252 - risk_free_rate
+        sharpe = float(excess_returns / (portfolio_returns.std() * np.sqrt(252))) if portfolio_returns.std() > 0 else None
+
+        # Max Drawdown
+        cumulative = (1 + portfolio_returns).cumprod()
+        rolling_max = cumulative.cummax()
+        drawdown = (cumulative - rolling_max) / rolling_max
+        max_drawdown = float(drawdown.min() * 100)
+
+        return {
+            'volatility': round(volatility, 2),
+            'beta': round(beta, 2) if beta is not None else None,
+            'sharpe_ratio': round(sharpe, 2) if sharpe is not None else None,
+            'max_drawdown': round(max_drawdown, 2)
+        }
+
+    except Exception as e:
+        return {
+            'volatility': None,
+            'beta': None,
+            'sharpe_ratio': None,
+            'max_drawdown': None,
+            'error': str(e)
+        }
+
+
+def calculate_historical_performance(positions):
+    """Calculate historical returns and performance chart data."""
+    if not YFINANCE_AVAILABLE:
+        return {
+            'returns': {},
+            'chart_data': None,
+            'error': 'yfinance not available'
+        }
+
+    total_value = sum(p.get('value', 0) or 0 for p in positions)
+    if total_value == 0:
+        return {'returns': {}, 'chart_data': None}
+
+    # Get symbols with weights
+    weights = {}
+    for pos in positions:
+        symbol = pos.get('symbol', '')
+        value = pos.get('value', 0) or 0
+        if value > 0 and symbol and symbol != 'CASH':
+            weights[symbol] = value / total_value
+
+    # Include cash weight for accurate returns
+    cash_weight = 0
+    for pos in positions:
+        if pos.get('symbol', '') == 'CASH':
+            cash_weight = (pos.get('value', 0) or 0) / total_value
+
+    if not weights:
+        return {'returns': {}, 'chart_data': None}
+
+    try:
+        # Get 1 year of historical data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=400)  # Extra days for YTD calculation
+
+        symbols = list(weights.keys())
+
+        # Download price data
+        data = yf.download(
+            symbols + ['SPY'],
+            start=start_date,
+            end=end_date,
+            progress=False,
+            auto_adjust=True
+        )['Close']
+
+        if data.empty:
+            return {'returns': {}, 'chart_data': None, 'error': 'No price data'}
+
+        # Handle single symbol case
+        if len(symbols) == 1 and 'SPY' not in symbols:
+            data = data.to_frame()
+            data.columns = [symbols[0]]
+            # Re-download with SPY
+            spy_data = yf.download('SPY', start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
+            data['SPY'] = spy_data
+
+        # Calculate daily returns
+        returns = data.pct_change().dropna()
+
+        if returns.empty:
+            return {'returns': {}, 'chart_data': None}
+
+        # Calculate portfolio returns (weighted)
+        portfolio_returns = pd.Series(0.0, index=returns.index)
+        for symbol, weight in weights.items():
+            if symbol in returns.columns:
+                portfolio_returns += returns[symbol] * weight
+        # Cash portion earns ~5% annual (approximate money market rate)
+        if cash_weight > 0:
+            daily_cash_return = (1.05 ** (1/252)) - 1
+            portfolio_returns += cash_weight * daily_cash_return
+
+        # Calculate cumulative returns for chart
+        portfolio_cumulative = (1 + portfolio_returns).cumprod()
+        spy_cumulative = (1 + returns['SPY']).cumprod() if 'SPY' in returns.columns else None
+
+        # Calculate period returns
+        today = returns.index[-1]
+        period_returns = {}
+
+        # Helper to calculate return over period
+        def calc_return(days_back):
+            target_date = today - timedelta(days=days_back)
+            # Find closest available date
+            valid_dates = portfolio_cumulative.index[portfolio_cumulative.index <= target_date]
+            if len(valid_dates) == 0:
+                return None, None
+            start_idx = valid_dates[-1]
+            port_ret = (portfolio_cumulative.iloc[-1] / portfolio_cumulative.loc[start_idx] - 1) * 100
+            spy_ret = None
+            if spy_cumulative is not None:
+                spy_ret = (spy_cumulative.iloc[-1] / spy_cumulative.loc[start_idx] - 1) * 100
+            return round(float(port_ret), 2), round(float(spy_ret), 2) if spy_ret is not None else None
+
+        # 1 Month
+        port_1m, spy_1m = calc_return(30)
+        period_returns['1M'] = {'portfolio': port_1m, 'benchmark': spy_1m}
+
+        # 3 Month
+        port_3m, spy_3m = calc_return(90)
+        period_returns['3M'] = {'portfolio': port_3m, 'benchmark': spy_3m}
+
+        # 6 Month
+        port_6m, spy_6m = calc_return(180)
+        period_returns['6M'] = {'portfolio': port_6m, 'benchmark': spy_6m}
+
+        # 1 Year
+        port_1y, spy_1y = calc_return(365)
+        period_returns['1Y'] = {'portfolio': port_1y, 'benchmark': spy_1y}
+
+        # YTD
+        year_start = datetime(today.year, 1, 1)
+        valid_dates = portfolio_cumulative.index[portfolio_cumulative.index >= year_start]
+        if len(valid_dates) > 0:
+            start_idx = valid_dates[0]
+            port_ytd = (portfolio_cumulative.iloc[-1] / portfolio_cumulative.loc[start_idx] - 1) * 100
+            spy_ytd = None
+            if spy_cumulative is not None:
+                spy_ytd = (spy_cumulative.iloc[-1] / spy_cumulative.loc[start_idx] - 1) * 100
+            period_returns['YTD'] = {
+                'portfolio': round(float(port_ytd), 2),
+                'benchmark': round(float(spy_ytd), 2) if spy_ytd is not None else None
+            }
+        else:
+            period_returns['YTD'] = {'portfolio': None, 'benchmark': None}
+
+        # Generate chart data (last 1 year, weekly points for performance)
+        one_year_ago = today - timedelta(days=365)
+        chart_mask = portfolio_cumulative.index >= one_year_ago
+
+        # Resample to weekly for smoother chart
+        portfolio_weekly = portfolio_cumulative[chart_mask]
+        spy_weekly = spy_cumulative[chart_mask] if spy_cumulative is not None else None
+
+        # Normalize to start at 100
+        if len(portfolio_weekly) > 0:
+            portfolio_normalized = (portfolio_weekly / portfolio_weekly.iloc[0]) * 100
+            chart_data = {
+                'labels': [d.strftime('%Y-%m-%d') for d in portfolio_normalized.index],
+                'portfolio': [round(float(v), 2) for v in portfolio_normalized.values],
+            }
+            if spy_weekly is not None and len(spy_weekly) > 0:
+                spy_normalized = (spy_weekly / spy_weekly.iloc[0]) * 100
+                chart_data['benchmark'] = [round(float(v), 2) for v in spy_normalized.values]
+        else:
+            chart_data = None
+
+        return {
+            'returns': period_returns,
+            'chart_data': chart_data
+        }
+
+    except Exception as e:
+        return {
+            'returns': {},
+            'chart_data': None,
+            'error': str(e)
+        }
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze_portfolio():
+    """Analyze a portfolio and return comprehensive analytics."""
+    try:
+        data = request.get_json()
+
+        if not data or 'positions' not in data:
+            return jsonify({'error': 'No positions provided'}), 400
+
+        positions = data['positions']
+
+        if not positions:
+            return jsonify({'error': 'Empty positions list'}), 400
+
+        # Calculate all analytics
+        allocations = calculate_allocations(positions)
+        concentration = calculate_concentration(positions)
+
+        # Risk metrics (optional, can be slow)
+        include_risk = data.get('include_risk', True)
+        if include_risk:
+            risk_metrics = calculate_risk_metrics(positions)
+            historical_performance = calculate_historical_performance(positions)
+        else:
+            risk_metrics = {
+                'volatility': None,
+                'beta': None,
+                'sharpe_ratio': None,
+                'max_drawdown': None
+            }
+            historical_performance = {'returns': {}, 'chart_data': None}
+
+        # Add classification to each position
+        classified_positions = []
+        for pos in positions:
+            classified_pos = pos.copy()
+            classification = get_classification(pos.get('symbol', ''))
+            classified_pos['classification'] = classification
+            classified_positions.append(classified_pos)
+
+        return jsonify({
+            'positions': classified_positions,
+            'total_value': allocations['total_value'],
+            'asset_allocation': allocations['asset_allocation'],
+            'asset_allocation_values': allocations['asset_allocation_values'],
+            'sub_class_allocation': allocations['sub_class_allocation'],
+            'sector_exposure': allocations['sector_exposure'],
+            'sector_benchmark': allocations['sector_benchmark'],
+            'geography': allocations['geography'],
+            'concentration': concentration,
+            'risk_metrics': risk_metrics,
+            'historical_performance': historical_performance
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
 
 
 if __name__ == '__main__':

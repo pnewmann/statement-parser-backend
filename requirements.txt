@@ -2,3 +2,6 @@ flask==3.0.0
 flask-cors==4.0.0
 pdfplumber==0.10.3
 gunicorn==21.2.0
+yfinance==0.2.36
+pandas==2.1.4
+numpy==1.26.3
