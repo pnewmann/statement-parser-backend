@@ -19,8 +19,34 @@ SYMBOL_PATTERN = re.compile(r'^[A-Z]{1,5}$')
 # Money pattern: $1,234.56 or 1,234.56
 MONEY_PATTERN = re.compile(r'\$?([\d,]+\.?\d*)')
 
-# Shares pattern: numbers with optional decimals
-SHARES_PATTERN = re.compile(r'^[\d,]+\.?\d*$')
+# Words that look like symbols but aren't
+EXCLUDED_WORDS = {
+    'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HAD', 'HER',
+    'WAS', 'ONE', 'OUR', 'OUT', 'HAS', 'HIS', 'HOW', 'ITS', 'MAY', 'NEW', 'NOW',
+    'OLD', 'SEE', 'WAY', 'WHO', 'BOY', 'DID', 'GET', 'LET', 'PUT', 'SAY', 'SHE',
+    'TOO', 'USE', 'DAY', 'ANY', 'YTD', 'ETF', 'IRA', 'USA', 'USD', 'TAX', 'FEE',
+    'TOTAL', 'CASH', 'BANK', 'DATE', 'TYPE', 'FUND', 'BOND', 'NOTE', 'COST',
+    'GAIN', 'LOSS', 'RATE', 'YEAR', 'TERM', 'PAGE', 'CUSIP', 'PRICE', 'VALUE',
+    'SHARE', 'ACCT', 'VISIT', 'TERMS', 'FUNDS', 'SWEEP', 'INCOME', 'PERIOD',
+    'SYMBOL', 'ACTION', 'MARGIN', 'ACCOUNT', 'SUMMARY', 'BALANCE', 'INTEREST',
+    'DIVIDEND', 'PURCHASE', 'CATEGORY', 'QUANTITY', 'DESCRIPTION', 'POSITIONS',
+    'IN', 'OF', 'TO', 'OR', 'IF', 'AT', 'BY', 'ON', 'AS', 'IS', 'IT', 'BE', 'WE',
+    'AN', 'DO', 'SO', 'UP', 'NO', 'GO', 'MY', 'US', 'AM', 'HE', 'ME',
+    'A', 'I', 'X', 'Z',  # Single letters that appear in statements
+    'HELD', 'THAT', 'THIS', 'WITH', 'FROM', 'HAVE', 'BEEN', 'EACH', 'WILL',
+    'MORE', 'WHEN', 'THEM', 'BEEN', 'CALL', 'FIRST', 'WATER', 'THAN', 'LONG',
+    'EL', 'TX', 'CA', 'NY', 'FL', 'CO', 'AZ', 'NC', 'VA', 'WA', 'MA', 'PA',  # State abbrevs
+}
+
+# Known ETF/Stock symbols to definitely include
+KNOWN_SYMBOLS = {
+    'SGOV', 'AGG', 'BND', 'BNDX', 'VTIP', 'STIP', 'TIP', 'TIPS', 'SCHZ', 'SCHP',
+    'VTI', 'VOO', 'SPY', 'QQQ', 'IVV', 'VEA', 'VWO', 'IEFA', 'IEMG', 'VIG',
+    'SCHD', 'SCHA', 'SCHB', 'SCHF', 'SCHE', 'SCHX', 'SCHY', 'SCHG', 'SCHV',
+    'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK',
+    'JPM', 'JNJ', 'V', 'PG', 'UNH', 'HD', 'MA', 'DIS', 'PYPL', 'BAC', 'VZ',
+    'ADBE', 'NFLX', 'CRM', 'PFE', 'TMO', 'COST', 'PEP', 'AVGO', 'CSCO', 'ACN',
+}
 
 
 def clean_number(value):
@@ -39,13 +65,27 @@ def is_valid_symbol(text):
     if not text:
         return False
     text = text.strip().upper()
-    # Common valid symbols are 1-5 uppercase letters
-    if SYMBOL_PATTERN.match(text):
+
+    # Check exclusion list first
+    if text in EXCLUDED_WORDS:
+        return False
+
+    # Known symbols are always valid
+    if text in KNOWN_SYMBOLS:
         return True
-    # Also allow some special cases like BRK.B, BF.A
-    if re.match(r'^[A-Z]{1,4}\.[A-Z]$', text):
-        return True
-    return False
+
+    # Must be 1-5 uppercase letters
+    if not SYMBOL_PATTERN.match(text):
+        # Also allow some special cases like BRK.B, BF.A
+        if not re.match(r'^[A-Z]{1,4}\.[A-Z]$', text):
+            return False
+
+    # Additional heuristics to filter out non-symbols
+    # If it's a common English word pattern, reject it
+    if len(text) <= 2 and text not in KNOWN_SYMBOLS:
+        return False
+
+    return True
 
 
 def detect_brokerage_pdf(text):
@@ -69,146 +109,245 @@ def detect_brokerage_pdf(text):
 def parse_schwab_pdf(pdf):
     """Parse Charles Schwab brokerage statement."""
     positions = []
-    full_text = ""
+    cash_positions = []
 
     for page in pdf.pages:
         text = page.extract_text() or ""
-        full_text += text + "\n"
 
-        # Try to extract tables
-        tables = page.extract_tables()
-        for table in tables:
-            if not table:
-                continue
-            for row in table:
-                if not row or len(row) < 3:
+        # Check if this page has the positions table
+        if 'Exchange Traded Funds' in text or 'Positions' in text:
+            tables = page.extract_tables()
+
+            for table in tables:
+                if not table:
                     continue
-                # Look for rows with stock symbols
-                for i, cell in enumerate(row):
-                    if cell and is_valid_symbol(cell):
-                        position = extract_position_from_row(row, i)
-                        if position:
-                            positions.append(position)
+
+                # Look for the ETF positions table
+                # Schwab format: Symbol, Description, Quantity, Price($), Market Value($), ...
+                for row in table:
+                    if not row or len(row) < 4:
+                        continue
+
+                    # Clean the row
+                    row = [str(cell).strip() if cell else '' for cell in row]
+
+                    # Skip header rows
+                    row_text = ' '.join(row).lower()
+                    if 'symbol' in row_text and 'description' in row_text:
+                        continue
+                    if 'total' in row_text.lower() and 'exchange' in row_text.lower():
+                        continue
+
+                    # Find a valid symbol in the row
+                    symbol = None
+                    symbol_idx = None
+
+                    for i, cell in enumerate(row):
+                        cell_clean = cell.strip().upper()
+                        # Remove any special characters like ◊
+                        cell_clean = re.sub(r'[^\w.]', '', cell_clean)
+
+                        if cell_clean and is_valid_symbol(cell_clean):
+                            symbol = cell_clean
+                            symbol_idx = i
                             break
 
-    # If table extraction didn't work well, try text parsing
-    if len(positions) < 2:
-        positions = parse_positions_from_text(full_text, 'schwab')
+                    if not symbol:
+                        continue
 
-    return positions
+                    # Extract description (usually right after symbol)
+                    description = ''
+                    if symbol_idx is not None and symbol_idx + 1 < len(row):
+                        desc = row[symbol_idx + 1].strip()
+                        # Clean up description - remove special chars
+                        desc = re.sub(r'[◊,]', '', desc).strip()
+                        if desc and len(desc) > 2 and not is_valid_symbol(desc):
+                            description = desc
+
+                    # Extract numbers from the row
+                    numbers = []
+                    for cell in row:
+                        num = clean_number(cell)
+                        if num is not None and num > 0:
+                            numbers.append(num)
+
+                    if len(numbers) >= 2:
+                        # Sort to identify: typically quantity < price < value
+                        # But we need to be smarter - look for patterns
+
+                        # Find quantity (usually has 4 decimal places in Schwab)
+                        quantity = None
+                        price = None
+                        value = None
+
+                        for num in numbers:
+                            num_str = str(num)
+                            # Quantity often has many decimal places
+                            if '.' in num_str:
+                                decimals = len(num_str.split('.')[1])
+                                if decimals >= 4 and num < 100000:
+                                    quantity = num
+                                    continue
+                            # Price is usually between 1 and 1000
+                            if 1 < num < 1000 and price is None:
+                                price = num
+                            # Value is usually the largest number
+                            if num > 100:
+                                if value is None or num > value:
+                                    value = num
+
+                        # Fallback: use position in sorted list
+                        if quantity is None and len(numbers) >= 1:
+                            numbers_sorted = sorted(numbers)
+                            # Smallest is often quantity (unless it's a price)
+                            if numbers_sorted[0] < 10000:
+                                quantity = numbers_sorted[0]
+
+                        if value is None and len(numbers) >= 1:
+                            value = max(numbers)
+
+                        # Calculate price if we have quantity and value
+                        if quantity and value and quantity > 0 and price is None:
+                            calc_price = value / quantity
+                            if 0.01 < calc_price < 10000:
+                                price = round(calc_price, 2)
+
+                        position = {
+                            'symbol': symbol,
+                            'description': description,
+                            'shares': round(quantity, 4) if quantity else None,
+                            'price': round(price, 2) if price else None,
+                            'value': round(value, 2) if value else None
+                        }
+
+                        # Only add if we have meaningful data
+                        if position['value'] and position['value'] > 10:
+                            positions.append(position)
+
+        # Also look for cash positions
+        if 'Cash and Cash Investments' in text or 'Bank Sweep' in text:
+            tables = page.extract_tables()
+            for table in tables:
+                if not table:
+                    continue
+                for row in table:
+                    if not row:
+                        continue
+                    row_text = ' '.join(str(c) for c in row if c).lower()
+
+                    # Look for bank sweep ending balance
+                    if 'charles schwab bank' in row_text or 'bank sweep' in row_text:
+                        if 'total' in row_text:
+                            continue
+                        numbers = []
+                        for cell in row:
+                            num = clean_number(cell)
+                            if num and num > 100:
+                                numbers.append(num)
+
+                        if numbers:
+                            # Look for ending balance (usually last significant number)
+                            for num in reversed(numbers):
+                                if num > 0:
+                                    cash_positions.append({
+                                        'symbol': 'CASH',
+                                        'description': 'Charles Schwab Bank Sweep',
+                                        'shares': None,
+                                        'price': None,
+                                        'value': round(num, 2)
+                                    })
+                                    break
+
+    # Combine positions, removing duplicates
+    seen = set()
+    unique_positions = []
+
+    for p in positions:
+        if p['symbol'] not in seen:
+            seen.add(p['symbol'])
+            unique_positions.append(p)
+
+    # Add cash if found and not duplicate
+    for c in cash_positions:
+        if c['symbol'] not in seen:
+            seen.add(c['symbol'])
+            unique_positions.append(c)
+            break  # Only add one cash position
+
+    return unique_positions
 
 
 def parse_fidelity_pdf(pdf):
     """Parse Fidelity brokerage statement."""
     positions = []
-    full_text = ""
 
     for page in pdf.pages:
         text = page.extract_text() or ""
-        full_text += text + "\n"
-
         tables = page.extract_tables()
+
         for table in tables:
             if not table:
                 continue
             for row in table:
                 if not row or len(row) < 3:
                     continue
+
+                # Clean row
+                row = [str(cell).strip() if cell else '' for cell in row]
+
+                # Find symbol
+                symbol = None
+                symbol_idx = None
+
                 for i, cell in enumerate(row):
-                    if cell and is_valid_symbol(cell):
-                        position = extract_position_from_row(row, i)
-                        if position:
-                            positions.append(position)
-                            break
+                    cell_clean = cell.strip().upper()
+                    if is_valid_symbol(cell_clean):
+                        symbol = cell_clean
+                        symbol_idx = i
+                        break
 
-    if len(positions) < 2:
-        positions = parse_positions_from_text(full_text, 'fidelity')
+                if not symbol:
+                    continue
 
-    return positions
+                # Get description
+                description = ''
+                if symbol_idx is not None and symbol_idx + 1 < len(row):
+                    desc = row[symbol_idx + 1].strip()
+                    if desc and len(desc) > 2 and not is_valid_symbol(desc):
+                        description = desc
 
-
-def extract_position_from_row(row, symbol_index):
-    """Extract position data from a table row."""
-    try:
-        symbol = row[symbol_index].strip().upper()
-
-        # Look for description (usually before or after symbol)
-        description = ""
-        if symbol_index > 0 and row[symbol_index - 1]:
-            desc_candidate = str(row[symbol_index - 1]).strip()
-            if len(desc_candidate) > 3 and not is_valid_symbol(desc_candidate):
-                description = desc_candidate
-        if not description and symbol_index < len(row) - 1 and row[symbol_index + 1]:
-            desc_candidate = str(row[symbol_index + 1]).strip()
-            if len(desc_candidate) > 3 and not is_valid_symbol(desc_candidate):
-                description = desc_candidate
-
-        # Look for numbers in the rest of the row
-        numbers = []
-        for cell in row:
-            if cell:
-                num = clean_number(cell)
-                if num is not None and num > 0:
-                    numbers.append(num)
-
-        if len(numbers) >= 2:
-            # Heuristic: smaller number is likely shares, larger is value
-            numbers.sort()
-            shares = numbers[0] if numbers[0] < 100000 else None
-            value = numbers[-1] if numbers[-1] > 1 else None
-
-            # Try to find price (value / shares)
-            price = None
-            if shares and value and shares > 0:
-                potential_price = value / shares
-                if 0.01 < potential_price < 100000:
-                    price = round(potential_price, 2)
-
-            return {
-                'symbol': symbol,
-                'description': description,
-                'shares': shares,
-                'price': price,
-                'value': value
-            }
-    except Exception:
-        pass
-    return None
-
-
-def parse_positions_from_text(text, brokerage):
-    """Parse positions from raw text when table extraction fails."""
-    positions = []
-    lines = text.split('\n')
-
-    for i, line in enumerate(lines):
-        words = line.split()
-        for j, word in enumerate(words):
-            if is_valid_symbol(word):
-                # Try to extract numbers from this line and surrounding lines
-                context = ' '.join(lines[max(0, i-1):min(len(lines), i+2)])
+                # Get numbers
                 numbers = []
-                for match in MONEY_PATTERN.finditer(context):
-                    num = clean_number(match.group(0))
-                    if num and num > 0:
+                for cell in row:
+                    num = clean_number(cell)
+                    if num is not None and num > 0:
                         numbers.append(num)
 
                 if len(numbers) >= 2:
                     numbers.sort()
                     position = {
-                        'symbol': word.upper(),
-                        'description': '',
+                        'symbol': symbol,
+                        'description': description,
                         'shares': numbers[0] if numbers[0] < 100000 else None,
                         'price': None,
                         'value': numbers[-1] if numbers[-1] > 1 else None
                     }
 
-                    # Avoid duplicates
-                    if not any(p['symbol'] == position['symbol'] for p in positions):
-                        positions.append(position)
-                break
+                    if position['shares'] and position['value']:
+                        position['price'] = round(position['value'] / position['shares'], 2)
 
-    return positions
+                    if position['value'] and position['value'] > 10:
+                        positions.append(position)
+
+    # Remove duplicates
+    seen = set()
+    unique = []
+    for p in positions:
+        if p['symbol'] not in seen:
+            seen.add(p['symbol'])
+            unique.append(p)
+
+    return unique
 
 
 def parse_csv_file(content):
@@ -316,24 +455,39 @@ def parse_pdf_file(content):
         elif brokerage == 'fidelity':
             positions = parse_fidelity_pdf(pdf)
         else:
-            # Generic parsing
+            # Generic parsing - be more conservative
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
                     if not table:
                         continue
                     for row in table:
-                        if not row or len(row) < 2:
+                        if not row or len(row) < 3:
                             continue
-                        for i, cell in enumerate(row):
-                            if cell and is_valid_symbol(str(cell)):
-                                position = extract_position_from_row(row, i)
-                                if position:
-                                    positions.append(position)
-                                    break
 
-            if len(positions) < 2:
-                positions = parse_positions_from_text(full_text, brokerage)
+                        row = [str(cell).strip() if cell else '' for cell in row]
+
+                        for i, cell in enumerate(row):
+                            if cell and is_valid_symbol(cell.upper()):
+                                # Get numbers
+                                numbers = []
+                                for c in row:
+                                    num = clean_number(c)
+                                    if num and num > 0:
+                                        numbers.append(num)
+
+                                if len(numbers) >= 2:
+                                    numbers.sort()
+                                    position = {
+                                        'symbol': cell.upper(),
+                                        'description': '',
+                                        'shares': numbers[0] if numbers[0] < 100000 else None,
+                                        'price': None,
+                                        'value': numbers[-1] if numbers[-1] > 1 else None
+                                    }
+                                    if position['value'] and position['value'] > 10:
+                                        positions.append(position)
+                                break
 
     # Remove duplicates
     seen = set()
