@@ -1,16 +1,27 @@
 """
-Brokerage Statement Parser API
+Brokerage Statement Parser API - Enterprise Edition
 Extracts positions from Schwab, Fidelity, and other brokerage statements.
 Provides portfolio analytics including asset allocation, sector exposure, and risk metrics.
+Includes user authentication, portfolio saving, and Plaid integration.
 """
 
 import io
 import csv
 import re
+import os
 from datetime import datetime, timedelta
+from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required,
+    get_jwt_identity, verify_jwt_in_request
+)
+import bcrypt
 import pdfplumber
+
+from models import db, User, Portfolio, PlaidConnection
+from plaid_client import plaid_client
 
 # Try to import yfinance, pandas, numpy for risk metrics
 try:
@@ -24,7 +35,42 @@ except ImportError:
     np = None
 
 app = Flask(__name__)
+
+# Database configuration
+database_url = os.environ.get('DATABASE_URL', 'sqlite:///statement_scan.db')
+# Handle Render's postgres:// URL (SQLAlchemy requires postgresql://)
+if database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# JWT configuration
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
+
+# Initialize extensions
+db.init_app(app)
+jwt = JWTManager(app)
 CORS(app)
+
+# Create tables on first request if they don't exist
+with app.app_context():
+    db.create_all()
+
+
+def optional_jwt_required():
+    """Decorator that allows optional JWT authentication."""
+    def wrapper(fn):
+        @wraps(fn)
+        def decorator(*args, **kwargs):
+            try:
+                verify_jwt_in_request(optional=True)
+            except Exception:
+                pass
+            return fn(*args, **kwargs)
+        return decorator
+    return wrapper
 
 # =============================================================================
 # ETF/STOCK CLASSIFICATION DATABASE
@@ -1003,6 +1049,441 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+# =============================================================================
+# AUTHENTICATION ENDPOINTS
+# =============================================================================
+
+@app.route('/auth/register', methods=['POST'])
+def register():
+    """Register a new user account."""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        name = data.get('name', '').strip()
+
+        # Validation
+        if not email or '@' not in email:
+            return jsonify({'error': 'Valid email is required'}), 400
+
+        if not password or len(password) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+        # Check if user already exists
+        existing_user = User.query.filter_by(email=email).first()
+        if existing_user:
+            return jsonify({'error': 'Email already registered'}), 409
+
+        # Hash password
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # Create user
+        user = User(
+            email=email,
+            password_hash=password_hash,
+            name=name or None
+        )
+        db.session.add(user)
+        db.session.commit()
+
+        # Generate JWT token
+        access_token = create_access_token(identity=user.id)
+
+        return jsonify({
+            'message': 'Account created successfully',
+            'user': user.to_dict(),
+            'access_token': access_token
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Registration failed: {str(e)}'}), 500
+
+
+@app.route('/auth/login', methods=['POST'])
+def login():
+    """Log in and get JWT token."""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
+
+        # Find user
+        user = User.query.filter_by(email=email).first()
+
+        if not user:
+            return jsonify({'error': 'Invalid email or password'}), 401
+
+        # Verify password
+        if not bcrypt.checkpw(password.encode('utf-8'), user.password_hash.encode('utf-8')):
+            return jsonify({'error': 'Invalid email or password'}), 401
+
+        # Generate JWT token
+        access_token = create_access_token(identity=user.id)
+
+        return jsonify({
+            'message': 'Login successful',
+            'user': user.to_dict(),
+            'access_token': access_token
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Login failed: {str(e)}'}), 500
+
+
+@app.route('/auth/me', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    """Get the current authenticated user."""
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        return jsonify({'user': user.to_dict()})
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to get user: {str(e)}'}), 500
+
+
+# =============================================================================
+# PORTFOLIO ENDPOINTS
+# =============================================================================
+
+@app.route('/portfolios', methods=['GET'])
+@jwt_required()
+def list_portfolios():
+    """List all portfolios for the current user."""
+    try:
+        user_id = get_jwt_identity()
+
+        portfolios = Portfolio.query.filter_by(user_id=user_id)\
+            .order_by(Portfolio.updated_at.desc())\
+            .all()
+
+        return jsonify({
+            'portfolios': [p.to_dict() for p in portfolios],
+            'count': len(portfolios)
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to list portfolios: {str(e)}'}), 500
+
+
+@app.route('/portfolios', methods=['POST'])
+@jwt_required()
+def create_portfolio():
+    """Save a new portfolio."""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        name = data.get('name', '').strip()
+        if not name:
+            return jsonify({'error': 'Portfolio name is required'}), 400
+
+        positions = data.get('positions', [])
+        if not positions:
+            return jsonify({'error': 'Positions are required'}), 400
+
+        # Calculate total value
+        total_value = sum(p.get('value', 0) or 0 for p in positions)
+
+        portfolio = Portfolio(
+            user_id=user_id,
+            name=name,
+            description=data.get('description', '').strip() or None,
+            positions=positions,
+            total_value=total_value
+        )
+        db.session.add(portfolio)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Portfolio saved successfully',
+            'portfolio': portfolio.to_dict()
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to save portfolio: {str(e)}'}), 500
+
+
+@app.route('/portfolios/<int:portfolio_id>', methods=['GET'])
+@jwt_required()
+def get_portfolio(portfolio_id):
+    """Get a specific portfolio by ID."""
+    try:
+        user_id = get_jwt_identity()
+
+        portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=user_id).first()
+
+        if not portfolio:
+            return jsonify({'error': 'Portfolio not found'}), 404
+
+        return jsonify({'portfolio': portfolio.to_dict()})
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to get portfolio: {str(e)}'}), 500
+
+
+@app.route('/portfolios/<int:portfolio_id>', methods=['PUT'])
+@jwt_required()
+def update_portfolio(portfolio_id):
+    """Update a portfolio."""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=user_id).first()
+
+        if not portfolio:
+            return jsonify({'error': 'Portfolio not found'}), 404
+
+        # Update fields
+        if 'name' in data:
+            name = data['name'].strip()
+            if name:
+                portfolio.name = name
+
+        if 'description' in data:
+            portfolio.description = data['description'].strip() or None
+
+        if 'positions' in data:
+            positions = data['positions']
+            portfolio.positions = positions
+            portfolio.total_value = sum(p.get('value', 0) or 0 for p in positions)
+
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Portfolio updated successfully',
+            'portfolio': portfolio.to_dict()
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to update portfolio: {str(e)}'}), 500
+
+
+@app.route('/portfolios/<int:portfolio_id>', methods=['DELETE'])
+@jwt_required()
+def delete_portfolio(portfolio_id):
+    """Delete a portfolio."""
+    try:
+        user_id = get_jwt_identity()
+
+        portfolio = Portfolio.query.filter_by(id=portfolio_id, user_id=user_id).first()
+
+        if not portfolio:
+            return jsonify({'error': 'Portfolio not found'}), 404
+
+        db.session.delete(portfolio)
+        db.session.commit()
+
+        return jsonify({'message': 'Portfolio deleted successfully'})
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to delete portfolio: {str(e)}'}), 500
+
+
+# =============================================================================
+# PLAID INTEGRATION ENDPOINTS
+# =============================================================================
+
+@app.route('/plaid/status', methods=['GET'])
+def plaid_status():
+    """Check if Plaid integration is available."""
+    return jsonify({
+        'available': plaid_client.is_configured(),
+        'env': plaid_client.env if plaid_client.is_configured() else None
+    })
+
+
+@app.route('/plaid/create-link-token', methods=['POST'])
+@jwt_required()
+def create_link_token():
+    """Create a Plaid Link token for the current user."""
+    try:
+        if not plaid_client.is_configured():
+            return jsonify({'error': 'Plaid is not configured'}), 503
+
+        user_id = get_jwt_identity()
+        data = request.get_json() or {}
+        redirect_uri = data.get('redirect_uri')
+
+        result = plaid_client.create_link_token(user_id, redirect_uri)
+
+        return jsonify({
+            'link_token': result.get('link_token'),
+            'expiration': result.get('expiration')
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to create link token: {str(e)}'}), 500
+
+
+@app.route('/plaid/exchange-token', methods=['POST'])
+@jwt_required()
+def exchange_plaid_token():
+    """Exchange a public token for an access token and save the connection."""
+    try:
+        if not plaid_client.is_configured():
+            return jsonify({'error': 'Plaid is not configured'}), 503
+
+        user_id = get_jwt_identity()
+        data = request.get_json()
+
+        if not data or 'public_token' not in data:
+            return jsonify({'error': 'public_token is required'}), 400
+
+        public_token = data['public_token']
+        institution_name = data.get('institution_name', '')
+        institution_id = data.get('institution_id', '')
+
+        # Exchange token
+        result = plaid_client.exchange_public_token(public_token)
+        access_token = result['access_token']
+        item_id = result['item_id']
+
+        # Encrypt and save
+        encrypted_token = plaid_client.encrypt_token(access_token)
+
+        connection = PlaidConnection(
+            user_id=user_id,
+            item_id=item_id,
+            access_token_encrypted=encrypted_token,
+            institution_name=institution_name,
+            institution_id=institution_id,
+            last_synced=datetime.utcnow()
+        )
+        db.session.add(connection)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Account connected successfully',
+            'connection': connection.to_dict()
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to exchange token: {str(e)}'}), 500
+
+
+@app.route('/plaid/connections', methods=['GET'])
+@jwt_required()
+def list_plaid_connections():
+    """List all Plaid connections for the current user."""
+    try:
+        user_id = get_jwt_identity()
+
+        connections = PlaidConnection.query.filter_by(user_id=user_id)\
+            .order_by(PlaidConnection.created_at.desc())\
+            .all()
+
+        return jsonify({
+            'connections': [c.to_dict() for c in connections],
+            'count': len(connections)
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to list connections: {str(e)}'}), 500
+
+
+@app.route('/plaid/connections/<int:connection_id>/sync', methods=['POST'])
+@jwt_required()
+def sync_plaid_connection(connection_id):
+    """Sync holdings from a Plaid connection."""
+    try:
+        if not plaid_client.is_configured():
+            return jsonify({'error': 'Plaid is not configured'}), 503
+
+        user_id = get_jwt_identity()
+
+        connection = PlaidConnection.query.filter_by(
+            id=connection_id, user_id=user_id
+        ).first()
+
+        if not connection:
+            return jsonify({'error': 'Connection not found'}), 404
+
+        # Decrypt access token
+        access_token = plaid_client.decrypt_token(connection.access_token_encrypted)
+
+        # Get holdings
+        holdings_response = plaid_client.get_holdings(access_token)
+
+        # Convert to positions
+        positions = plaid_client.holdings_to_positions(holdings_response)
+
+        # Update last synced
+        connection.last_synced = datetime.utcnow()
+        db.session.commit()
+
+        return jsonify({
+            'positions': positions,
+            'count': len(positions),
+            'accounts': holdings_response.get('accounts', []),
+            'connection': connection.to_dict()
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to sync holdings: {str(e)}'}), 500
+
+
+@app.route('/plaid/connections/<int:connection_id>', methods=['DELETE'])
+@jwt_required()
+def delete_plaid_connection(connection_id):
+    """Disconnect a Plaid account."""
+    try:
+        user_id = get_jwt_identity()
+
+        connection = PlaidConnection.query.filter_by(
+            id=connection_id, user_id=user_id
+        ).first()
+
+        if not connection:
+            return jsonify({'error': 'Connection not found'}), 404
+
+        # Try to remove item from Plaid
+        if plaid_client.is_configured():
+            try:
+                access_token = plaid_client.decrypt_token(connection.access_token_encrypted)
+                plaid_client.remove_item(access_token)
+            except Exception:
+                pass  # Continue even if Plaid removal fails
+
+        # Delete from database
+        db.session.delete(connection)
+        db.session.commit()
+
+        return jsonify({'message': 'Connection removed successfully'})
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Failed to remove connection: {str(e)}'}), 500
+
+
 @app.route('/parse', methods=['POST'])
 def parse_statement():
     """Parse an uploaded brokerage statement."""
@@ -1584,6 +2065,317 @@ def calculate_scenario_analysis(positions, allocations):
     results.sort(key=lambda x: x['portfolio_impact'])
 
     return {'scenarios': results}
+
+
+@app.route('/compare', methods=['POST'])
+@optional_jwt_required()
+def compare_portfolios():
+    """Compare two portfolios side-by-side."""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        portfolio_a_input = data.get('portfolio_a')
+        portfolio_b_input = data.get('portfolio_b')
+
+        if not portfolio_a_input or not portfolio_b_input:
+            return jsonify({'error': 'Both portfolio_a and portfolio_b are required'}), 400
+
+        # Helper to get positions from portfolio input
+        def get_positions(portfolio_input):
+            if 'positions' in portfolio_input:
+                return portfolio_input['positions']
+            elif 'id' in portfolio_input:
+                # Load from database
+                user_id = get_jwt_identity()
+                if not user_id:
+                    raise ValueError('Authentication required to load saved portfolios')
+                portfolio = Portfolio.query.filter_by(id=portfolio_input['id'], user_id=user_id).first()
+                if not portfolio:
+                    raise ValueError(f'Portfolio {portfolio_input["id"]} not found')
+                return portfolio.positions
+            else:
+                raise ValueError('Portfolio must have either "positions" or "id"')
+
+        # Get positions for both portfolios
+        try:
+            positions_a = get_positions(portfolio_a_input)
+            positions_b = get_positions(portfolio_b_input)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        # Analyze both portfolios
+        def analyze(positions):
+            allocations = calculate_allocations(positions)
+            concentration = calculate_concentration(positions)
+            risk_metrics = calculate_risk_metrics(positions)
+            historical_performance = calculate_historical_performance(positions)
+            scenario_analysis = calculate_scenario_analysis(positions, allocations)
+
+            # Add classification to each position
+            classified_positions = []
+            for pos in positions:
+                classified_pos = pos.copy()
+                classification = get_classification(pos.get('symbol', ''))
+                classified_pos['classification'] = classification
+                classified_positions.append(classified_pos)
+
+            return {
+                'positions': classified_positions,
+                'total_value': allocations['total_value'],
+                'asset_allocation': allocations['asset_allocation'],
+                'asset_allocation_values': allocations['asset_allocation_values'],
+                'sub_class_allocation': allocations['sub_class_allocation'],
+                'sector_exposure': allocations['sector_exposure'],
+                'geography': allocations['geography'],
+                'concentration': concentration,
+                'risk_metrics': risk_metrics,
+                'historical_performance': historical_performance,
+                'scenario_analysis': scenario_analysis
+            }
+
+        analysis_a = analyze(positions_a)
+        analysis_b = analyze(positions_b)
+
+        # Calculate differences
+        def calc_diff(dict_a, dict_b):
+            all_keys = set(dict_a.keys()) | set(dict_b.keys())
+            return {k: round((dict_b.get(k, 0) or 0) - (dict_a.get(k, 0) or 0), 2) for k in all_keys}
+
+        def calc_metric_diff(metrics_a, metrics_b, key):
+            val_a = metrics_a.get(key)
+            val_b = metrics_b.get(key)
+            if val_a is not None and val_b is not None:
+                return round(val_b - val_a, 2)
+            return None
+
+        # Risk metric differences
+        risk_diff = {
+            'volatility': calc_metric_diff(analysis_a['risk_metrics'], analysis_b['risk_metrics'], 'volatility'),
+            'beta': calc_metric_diff(analysis_a['risk_metrics'], analysis_b['risk_metrics'], 'beta'),
+            'sharpe_ratio': calc_metric_diff(analysis_a['risk_metrics'], analysis_b['risk_metrics'], 'sharpe_ratio'),
+            'max_drawdown': calc_metric_diff(analysis_a['risk_metrics'], analysis_b['risk_metrics'], 'max_drawdown')
+        }
+
+        # Performance differences
+        perf_a = analysis_a.get('historical_performance', {}).get('returns', {})
+        perf_b = analysis_b.get('historical_performance', {}).get('returns', {})
+        performance_diff = {}
+        for period in ['1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y']:
+            val_a = perf_a.get(period, {}).get('portfolio')
+            val_b = perf_b.get(period, {}).get('portfolio')
+            if val_a is not None and val_b is not None:
+                performance_diff[period] = round(val_b - val_a, 2)
+            else:
+                performance_diff[period] = None
+
+        comparison = {
+            'allocation_diff': calc_diff(analysis_a['asset_allocation'], analysis_b['asset_allocation']),
+            'sector_diff': calc_diff(analysis_a['sector_exposure'], analysis_b['sector_exposure']),
+            'geography_diff': calc_diff(analysis_a['geography'], analysis_b['geography']),
+            'risk_diff': risk_diff,
+            'performance_diff': performance_diff,
+            'total_value_diff': round((analysis_b['total_value'] or 0) - (analysis_a['total_value'] or 0), 2)
+        }
+
+        return jsonify({
+            'portfolio_a': analysis_a,
+            'portfolio_b': analysis_b,
+            'comparison': comparison
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Comparison failed: {str(e)}'}), 500
+
+
+@app.route('/what-if', methods=['POST'])
+@optional_jwt_required()
+def what_if_analysis():
+    """Perform what-if analysis on a portfolio with hypothetical changes."""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        # Get base portfolio positions
+        base_positions = None
+        if 'positions' in data:
+            base_positions = data['positions']
+        elif 'base_portfolio_id' in data:
+            user_id = get_jwt_identity()
+            if not user_id:
+                return jsonify({'error': 'Authentication required to load saved portfolios'}), 401
+            portfolio = Portfolio.query.filter_by(id=data['base_portfolio_id'], user_id=user_id).first()
+            if not portfolio:
+                return jsonify({'error': 'Portfolio not found'}), 404
+            base_positions = portfolio.positions
+
+        if not base_positions:
+            return jsonify({'error': 'Base portfolio positions are required'}), 400
+
+        changes = data.get('changes', [])
+
+        # Create a deep copy of positions for modification
+        import copy
+        modified_positions = copy.deepcopy(base_positions)
+
+        # Track execution costs
+        total_cost = 0.0
+
+        # Apply changes
+        for change in changes:
+            action = change.get('action')
+            symbol = change.get('symbol', '').upper()
+
+            if action == 'add':
+                # Add new position
+                shares = change.get('shares', 0)
+                price = change.get('price', 0)
+                value = shares * price
+                total_cost += value
+
+                # Check if position already exists
+                existing = next((p for p in modified_positions if p.get('symbol', '').upper() == symbol), None)
+                if existing:
+                    # Add to existing position
+                    existing['shares'] = (existing.get('shares') or 0) + shares
+                    existing['value'] = (existing.get('value') or 0) + value
+                    if existing['shares'] > 0:
+                        existing['price'] = existing['value'] / existing['shares']
+                else:
+                    # Create new position
+                    modified_positions.append({
+                        'symbol': symbol,
+                        'description': change.get('description', ''),
+                        'shares': shares,
+                        'price': price,
+                        'value': value
+                    })
+
+            elif action == 'remove':
+                # Remove position entirely
+                pos_to_remove = next((p for p in modified_positions if p.get('symbol', '').upper() == symbol), None)
+                if pos_to_remove:
+                    total_cost += pos_to_remove.get('value', 0)  # Selling generates cash
+                    modified_positions = [p for p in modified_positions if p.get('symbol', '').upper() != symbol]
+
+            elif action == 'adjust':
+                # Adjust shares in existing position
+                new_shares = change.get('new_shares', 0)
+                pos = next((p for p in modified_positions if p.get('symbol', '').upper() == symbol), None)
+                if pos:
+                    old_shares = pos.get('shares') or 0
+                    price = pos.get('price') or (pos.get('value', 0) / old_shares if old_shares > 0 else 0)
+                    share_diff = new_shares - old_shares
+                    total_cost += abs(share_diff * price)
+
+                    pos['shares'] = new_shares
+                    pos['value'] = new_shares * price
+                    pos['price'] = price
+
+            elif action == 'rebalance':
+                # Rebalance to target allocation
+                target = change.get('target', {})  # e.g., {'Stocks': 60, 'Bonds': 40}
+
+                total_value = sum(p.get('value', 0) or 0 for p in modified_positions)
+                if total_value == 0:
+                    continue
+
+                # Calculate current allocation by asset class
+                current_by_class = {}
+                for pos in modified_positions:
+                    cls = get_classification(pos.get('symbol', ''))
+                    asset_class = cls['asset_class']
+                    current_by_class[asset_class] = current_by_class.get(asset_class, 0) + (pos.get('value', 0) or 0)
+
+                # Adjust each position proportionally to reach target
+                for pos in modified_positions:
+                    cls = get_classification(pos.get('symbol', ''))
+                    asset_class = cls['asset_class']
+
+                    if asset_class not in target:
+                        continue
+
+                    current_class_value = current_by_class.get(asset_class, 0)
+                    target_class_value = total_value * (target[asset_class] / 100)
+
+                    if current_class_value > 0:
+                        # Scale position proportionally
+                        pos_pct_of_class = (pos.get('value', 0) or 0) / current_class_value
+                        new_value = target_class_value * pos_pct_of_class
+                        old_value = pos.get('value', 0) or 0
+
+                        total_cost += abs(new_value - old_value)
+
+                        pos['value'] = new_value
+                        if pos.get('price') and pos['price'] > 0:
+                            pos['shares'] = new_value / pos['price']
+
+        # Analyze both original and modified portfolios
+        def analyze(positions):
+            allocations = calculate_allocations(positions)
+            concentration = calculate_concentration(positions)
+            risk_metrics = calculate_risk_metrics(positions)
+
+            classified_positions = []
+            for pos in positions:
+                classified_pos = pos.copy()
+                classification = get_classification(pos.get('symbol', ''))
+                classified_pos['classification'] = classification
+                classified_positions.append(classified_pos)
+
+            return {
+                'positions': classified_positions,
+                'total_value': allocations['total_value'],
+                'asset_allocation': allocations['asset_allocation'],
+                'asset_allocation_values': allocations['asset_allocation_values'],
+                'sub_class_allocation': allocations['sub_class_allocation'],
+                'sector_exposure': allocations['sector_exposure'],
+                'geography': allocations['geography'],
+                'concentration': concentration,
+                'risk_metrics': risk_metrics
+            }
+
+        original_analysis = analyze(base_positions)
+        modified_analysis = analyze(modified_positions)
+
+        # Calculate impact
+        def calc_diff(dict_a, dict_b):
+            all_keys = set(dict_a.keys()) | set(dict_b.keys())
+            return {k: round((dict_b.get(k, 0) or 0) - (dict_a.get(k, 0) or 0), 2) for k in all_keys}
+
+        def calc_metric_diff(metrics_a, metrics_b, key):
+            val_a = metrics_a.get(key)
+            val_b = metrics_b.get(key)
+            if val_a is not None and val_b is not None:
+                return round(val_b - val_a, 2)
+            return None
+
+        impact = {
+            'allocation_change': calc_diff(original_analysis['asset_allocation'], modified_analysis['asset_allocation']),
+            'sector_change': calc_diff(original_analysis['sector_exposure'], modified_analysis['sector_exposure']),
+            'geography_change': calc_diff(original_analysis['geography'], modified_analysis['geography']),
+            'risk_change': {
+                'volatility': calc_metric_diff(original_analysis['risk_metrics'], modified_analysis['risk_metrics'], 'volatility'),
+                'beta': calc_metric_diff(original_analysis['risk_metrics'], modified_analysis['risk_metrics'], 'beta'),
+                'sharpe_ratio': calc_metric_diff(original_analysis['risk_metrics'], modified_analysis['risk_metrics'], 'sharpe_ratio'),
+                'max_drawdown': calc_metric_diff(original_analysis['risk_metrics'], modified_analysis['risk_metrics'], 'max_drawdown')
+            },
+            'value_change': round((modified_analysis['total_value'] or 0) - (original_analysis['total_value'] or 0), 2),
+            'cost_to_execute': round(total_cost, 2)
+        }
+
+        return jsonify({
+            'original': original_analysis,
+            'modified': modified_analysis,
+            'impact': impact
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'What-if analysis failed: {str(e)}'}), 500
 
 
 @app.route('/analyze', methods=['POST'])

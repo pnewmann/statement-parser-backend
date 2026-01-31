@@ -1,5 +1,11 @@
 flask==3.0.0
 flask-cors==4.0.0
+flask-sqlalchemy==3.1.1
+flask-jwt-extended==4.6.0
+psycopg2-binary==2.9.9
+bcrypt==4.1.2
+plaid-python==18.1.0
+cryptography==41.0.7
 pdfplumber==0.10.3
 gunicorn==21.2.0
 yfinance>=0.2.40
