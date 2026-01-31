@@ -65,6 +65,80 @@ KNOWN_SYMBOLS = {
 }
 
 
+# Common words found in fund descriptions for splitting
+DESCRIPTION_WORDS = [
+    'ISHARES', 'VANGUARD', 'SCHWAB', 'FIDELITY', 'STATE', 'STREET', 'SPDR',
+    'BITCOIN', 'ETHEREUM', 'CRYPTO', 'DIGITAL', 'TRUST', 'ETF', 'FUND',
+    'TOTAL', 'STOCK', 'BOND', 'MARKET', 'INDEX', 'CORE', 'AGGREGATE',
+    'TREASURY', 'GOVERNMENT', 'CORPORATE', 'MUNICIPAL', 'HIGH', 'YIELD',
+    'SHORT', 'TERM', 'LONG', 'INTERMEDIATE', 'ULTRA', 'EXTENDED',
+    'SMALL', 'MID', 'LARGE', 'CAP', 'VALUE', 'GROWTH', 'BLEND',
+    'INTERNATIONAL', 'GLOBAL', 'WORLD', 'EMERGING', 'DEVELOPED', 'MARKETS',
+    'EUROPE', 'PACIFIC', 'ASIA', 'JAPAN', 'CHINA', 'INDIA', 'BRAZIL',
+    'FTSE', 'MSCI', 'RUSSELL', 'S&P', 'DOW', 'NASDAQ', 'NYSE',
+    'DIVIDEND', 'INCOME', 'APPRECIATION', 'EQUITY', 'SECURITIES',
+    'INFLATION', 'PROTECTED', 'TIPS', 'REAL', 'ESTATE', 'REIT',
+    'TECHNOLOGY', 'HEALTHCARE', 'FINANCIAL', 'ENERGY', 'UTILITIES',
+    'CONSUMER', 'INDUSTRIAL', 'MATERIALS', 'COMMUNICATION', 'SERVICES',
+    'PORTFOLIO', 'BALANCED', 'CONSERVATIVE', 'MODERATE', 'AGGRESSIVE',
+    'US', 'USA', 'USD', 'JP', 'MORGAN', 'JPMORGAN', 'BLACKROCK',
+    'MONTH', 'YEAR', 'DURATION', 'MATURITY', 'FLOATING', 'RATE',
+    'INVESTMENT', 'GRADE', 'JUNK', 'CONVERTIBLE', 'PREFERRED',
+    'EX', 'ALL', 'WORLD', 'ACWI', 'EAFE', 'EMU',
+    'PRTFL', 'PORTFL', 'MTS', 'MARKT', 'INFPROT', 'SHRT', 'INF', 'PROT',
+]
+
+
+def split_description(text):
+    """Split concatenated description into readable words."""
+    if not text:
+        return ''
+
+    # Already has spaces
+    if ' ' in text:
+        return text
+
+    text = text.upper()
+    result = []
+    remaining = text
+
+    while remaining:
+        matched = False
+        # Try to match longest words first
+        for word in sorted(DESCRIPTION_WORDS, key=len, reverse=True):
+            if remaining.startswith(word):
+                result.append(word)
+                remaining = remaining[len(word):]
+                matched = True
+                break
+
+        if not matched:
+            # No known word matched, take one character and continue
+            # But try to find the next known word boundary
+            found_next = False
+            for i in range(1, len(remaining)):
+                for word in DESCRIPTION_WORDS:
+                    if remaining[i:].startswith(word):
+                        result.append(remaining[:i])
+                        remaining = remaining[i:]
+                        found_next = True
+                        break
+                if found_next:
+                    break
+
+            if not found_next:
+                # No more known words, append rest
+                result.append(remaining)
+                break
+
+    # Join and clean up
+    description = ' '.join(result)
+    # Fix common patterns
+    description = description.replace('S & P', 'S&P')
+    description = description.replace('JP MORGAN', 'JPMORGAN')
+    return description.strip()
+
+
 def clean_number(value):
     """Convert string number to float, handling commas and dollar signs."""
     if not value:
@@ -187,9 +261,8 @@ def parse_schwab_pdf(pdf):
                             description = line[len(symbol):desc_end].strip()
                             # Clean up: remove special chars, trailing commas
                             description = re.sub(r'[,◊\(\)]', '', description).strip()
-                            # Add spaces to camelCase (ISHARESCOREUS -> ISHARES CORE US)
-                            description = re.sub(r'([a-z])([A-Z])', r'\1 \2', description)
-                            description = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', description)
+                            # Split concatenated words
+                            description = split_description(description)
                         else:
                             description = ''
 
@@ -224,6 +297,7 @@ def parse_schwab_pdf(pdf):
                                 desc_end = first_num_match.start()
                                 description = line[len(symbol):desc_end].strip()
                                 description = re.sub(r'[,◊\(\)]', '', description).strip()
+                                description = split_description(description)
                             else:
                                 description = ''
 
