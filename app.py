@@ -11,16 +11,17 @@ from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pdfplumber
-import numpy as np
 
-# Try to import yfinance and pandas for risk metrics
+# Try to import yfinance, pandas, numpy for risk metrics
 try:
     import yfinance as yf
     import pandas as pd
+    import numpy as np
     YFINANCE_AVAILABLE = True
 except ImportError:
     YFINANCE_AVAILABLE = False
     pd = None
+    np = None
 
 app = Flask(__name__)
 CORS(app)
