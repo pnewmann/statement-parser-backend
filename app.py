@@ -1278,7 +1278,7 @@ def calculate_risk_metrics(positions):
 
 
 def calculate_historical_performance(positions):
-    """Calculate historical returns and performance chart data."""
+    """Calculate historical returns and performance chart data for up to 5 years."""
     if not YFINANCE_AVAILABLE:
         return {
             'returns': {},
@@ -1308,9 +1308,9 @@ def calculate_historical_performance(positions):
         return {'returns': {}, 'chart_data': None}
 
     try:
-        # Get 1 year of historical data
+        # Get 5+ years of historical data
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=400)  # Extra days for YTD calculation
+        start_date = end_date - timedelta(days=1900)  # ~5.2 years
 
         symbols = list(weights.keys())
 
@@ -1368,7 +1368,7 @@ def calculate_historical_performance(positions):
             start_idx = valid_dates[-1]
             port_ret = (portfolio_cumulative.iloc[-1] / portfolio_cumulative.loc[start_idx] - 1) * 100
             spy_ret = None
-            if spy_cumulative is not None:
+            if spy_cumulative is not None and start_idx in spy_cumulative.index:
                 spy_ret = (spy_cumulative.iloc[-1] / spy_cumulative.loc[start_idx] - 1) * 100
             return round(float(port_ret), 2), round(float(spy_ret), 2) if spy_ret is not None else None
 
@@ -1388,6 +1388,14 @@ def calculate_historical_performance(positions):
         port_1y, spy_1y = calc_return(365)
         period_returns['1Y'] = {'portfolio': port_1y, 'benchmark': spy_1y}
 
+        # 3 Year
+        port_3y, spy_3y = calc_return(1095)
+        period_returns['3Y'] = {'portfolio': port_3y, 'benchmark': spy_3y}
+
+        # 5 Year
+        port_5y, spy_5y = calc_return(1825)
+        period_returns['5Y'] = {'portfolio': port_5y, 'benchmark': spy_5y}
+
         # YTD
         year_start = datetime(today.year, 1, 1)
         valid_dates = portfolio_cumulative.index[portfolio_cumulative.index >= year_start]
@@ -1404,13 +1412,10 @@ def calculate_historical_performance(positions):
         else:
             period_returns['YTD'] = {'portfolio': None, 'benchmark': None}
 
-        # Generate chart data (last 1 year, weekly points for performance)
-        one_year_ago = today - timedelta(days=365)
-        chart_mask = portfolio_cumulative.index >= one_year_ago
-
-        # Resample to weekly for smoother chart
-        portfolio_weekly = portfolio_cumulative[chart_mask]
-        spy_weekly = spy_cumulative[chart_mask] if spy_cumulative is not None else None
+        # Generate chart data for full available period (up to 5 years)
+        # Resample to weekly to reduce data points
+        portfolio_weekly = portfolio_cumulative.resample('W').last().dropna()
+        spy_weekly = spy_cumulative.resample('W').last().dropna() if spy_cumulative is not None else None
 
         # Normalize to start at 100
         if len(portfolio_weekly) > 0:
@@ -1436,6 +1441,140 @@ def calculate_historical_performance(positions):
             'chart_data': None,
             'error': str(e)
         }
+
+
+def calculate_scenario_analysis(positions, allocations):
+    """Calculate portfolio impact under various stress scenarios."""
+    total_value = sum(p.get('value', 0) or 0 for p in positions)
+    if total_value == 0:
+        return {'scenarios': []}
+
+    # Get asset allocation percentages
+    asset_alloc = allocations.get('asset_allocation', {})
+    stocks_pct = asset_alloc.get('Stocks', 0) / 100
+    bonds_pct = asset_alloc.get('Bonds', 0) / 100
+    cash_pct = asset_alloc.get('Cash', 0) / 100
+    real_estate_pct = asset_alloc.get('Real Estate', 0) / 100
+    crypto_pct = asset_alloc.get('Crypto', 0) / 100
+    commodities_pct = asset_alloc.get('Commodities', 0) / 100
+
+    # Define scenarios with asset class impacts (as decimals)
+    scenarios = [
+        {
+            'name': '2008 Financial Crisis',
+            'description': 'Severe market downturn similar to 2008',
+            'impacts': {
+                'Stocks': -0.50,
+                'Bonds': 0.05,  # Flight to safety
+                'Cash': 0.02,
+                'Real Estate': -0.35,
+                'Crypto': -0.70,
+                'Commodities': -0.30
+            }
+        },
+        {
+            'name': 'COVID-19 Crash',
+            'description': 'Rapid market selloff like March 2020',
+            'impacts': {
+                'Stocks': -0.34,
+                'Bonds': 0.03,
+                'Cash': 0.01,
+                'Real Estate': -0.25,
+                'Crypto': -0.50,
+                'Commodities': -0.25
+            }
+        },
+        {
+            'name': 'Dot-Com Bubble',
+            'description': 'Tech-focused bear market',
+            'impacts': {
+                'Stocks': -0.45,
+                'Bonds': 0.08,
+                'Cash': 0.03,
+                'Real Estate': -0.05,
+                'Crypto': -0.80,
+                'Commodities': -0.10
+            }
+        },
+        {
+            'name': 'Rising Interest Rates',
+            'description': 'Sharp rate hikes impacting bond prices',
+            'impacts': {
+                'Stocks': -0.15,
+                'Bonds': -0.20,
+                'Cash': 0.04,
+                'Real Estate': -0.20,
+                'Crypto': -0.25,
+                'Commodities': 0.05
+            }
+        },
+        {
+            'name': 'High Inflation',
+            'description': 'Sustained inflation above 8%',
+            'impacts': {
+                'Stocks': -0.10,
+                'Bonds': -0.15,
+                'Cash': -0.05,  # Purchasing power loss
+                'Real Estate': 0.05,  # Inflation hedge
+                'Crypto': -0.20,
+                'Commodities': 0.15  # Inflation hedge
+            }
+        },
+        {
+            'name': 'Mild Recession',
+            'description': 'Moderate economic contraction',
+            'impacts': {
+                'Stocks': -0.20,
+                'Bonds': 0.05,
+                'Cash': 0.02,
+                'Real Estate': -0.15,
+                'Crypto': -0.35,
+                'Commodities': -0.15
+            }
+        },
+        {
+            'name': 'Bull Market Rally',
+            'description': 'Strong market expansion (+25%)',
+            'impacts': {
+                'Stocks': 0.25,
+                'Bonds': -0.03,
+                'Cash': 0.02,
+                'Real Estate': 0.15,
+                'Crypto': 0.50,
+                'Commodities': 0.10
+            }
+        }
+    ]
+
+    results = []
+    for scenario in scenarios:
+        impacts = scenario['impacts']
+
+        # Calculate weighted portfolio impact
+        portfolio_impact = (
+            stocks_pct * impacts.get('Stocks', 0) +
+            bonds_pct * impacts.get('Bonds', 0) +
+            cash_pct * impacts.get('Cash', 0) +
+            real_estate_pct * impacts.get('Real Estate', 0) +
+            crypto_pct * impacts.get('Crypto', 0) +
+            commodities_pct * impacts.get('Commodities', 0)
+        )
+
+        projected_value = total_value * (1 + portfolio_impact)
+        value_change = projected_value - total_value
+
+        results.append({
+            'name': scenario['name'],
+            'description': scenario['description'],
+            'portfolio_impact': round(portfolio_impact * 100, 2),
+            'projected_value': round(projected_value, 2),
+            'value_change': round(value_change, 2)
+        })
+
+    # Sort by impact (worst first, but positive last)
+    results.sort(key=lambda x: x['portfolio_impact'])
+
+    return {'scenarios': results}
 
 
 @app.route('/analyze', methods=['POST'])
@@ -1470,6 +1609,9 @@ def analyze_portfolio():
             }
             historical_performance = {'returns': {}, 'chart_data': None}
 
+        # Calculate scenario analysis
+        scenario_analysis = calculate_scenario_analysis(positions, allocations)
+
         # Add classification to each position
         classified_positions = []
         for pos in positions:
@@ -1489,7 +1631,8 @@ def analyze_portfolio():
             'geography': allocations['geography'],
             'concentration': concentration,
             'risk_metrics': risk_metrics,
-            'historical_performance': historical_performance
+            'historical_performance': historical_performance,
+            'scenario_analysis': scenario_analysis
         })
 
     except Exception as e:
