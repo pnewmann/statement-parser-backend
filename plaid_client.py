@@ -84,23 +84,28 @@ class PlaidClient:
         if not self.is_configured():
             raise ValueError('Plaid is not configured')
 
-        # Build request parameters
-        request_params = {
-            'user': LinkTokenCreateRequestUser(client_user_id=str(user_id)),
-            'client_name': 'Statement Scan',
-            'products': [Products('investments')],
-            'country_codes': [CountryCode('US')],
-            'language': 'en'
-        }
+        try:
+            # Build request parameters
+            request_params = {
+                'user': LinkTokenCreateRequestUser(client_user_id=str(user_id)),
+                'client_name': 'Statement Scan',
+                'products': [Products('investments')],
+                'country_codes': [CountryCode('US')],
+                'language': 'en'
+            }
 
-        # Only include redirect_uri if provided
-        if redirect_uri:
-            request_params['redirect_uri'] = redirect_uri
+            # Only include redirect_uri if provided
+            if redirect_uri:
+                request_params['redirect_uri'] = redirect_uri
 
-        request = LinkTokenCreateRequest(**request_params)
+            request = LinkTokenCreateRequest(**request_params)
 
-        response = self.client.link_token_create(request)
-        return response.to_dict()
+            response = self.client.link_token_create(request)
+            return response.to_dict()
+        except plaid.ApiException as e:
+            # Extract the actual error message from Plaid
+            error_body = e.body if hasattr(e, 'body') else str(e)
+            raise ValueError(f'Plaid API error: {error_body}')
 
     def exchange_public_token(self, public_token):
         """Exchange a public token for an access token."""
