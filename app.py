@@ -1318,7 +1318,11 @@ def plaid_status():
     """Check if Plaid integration is available."""
     return jsonify({
         'available': plaid_client.is_configured(),
-        'env': plaid_client.env if plaid_client.is_configured() else None
+        'env': plaid_client.env if plaid_client.is_configured() else None,
+        'client_id_set': bool(plaid_client.client_id),
+        'secret_set': bool(plaid_client.secret),
+        'client_id_length': len(plaid_client.client_id) if plaid_client.client_id else 0,
+        'secret_length': len(plaid_client.secret) if plaid_client.secret else 0
     })
 
 
@@ -1342,7 +1346,12 @@ def create_link_token():
         })
 
     except Exception as e:
-        return jsonify({'error': f'Failed to create link token: {str(e)}'}), 500
+        import traceback
+        return jsonify({
+            'error': f'Failed to create link token: {str(e)}',
+            'error_type': type(e).__name__,
+            'traceback': traceback.format_exc()
+        }), 500
 
 
 @app.route('/plaid/exchange-token', methods=['POST'])
