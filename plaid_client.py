@@ -84,14 +84,20 @@ class PlaidClient:
         if not self.is_configured():
             raise ValueError('Plaid is not configured')
 
-        request = LinkTokenCreateRequest(
-            user=LinkTokenCreateRequestUser(client_user_id=str(user_id)),
-            client_name='Statement Scan',
-            products=[Products('investments')],
-            country_codes=[CountryCode('US')],
-            language='en',
-            redirect_uri=redirect_uri
-        )
+        # Build request parameters
+        request_params = {
+            'user': LinkTokenCreateRequestUser(client_user_id=str(user_id)),
+            'client_name': 'Statement Scan',
+            'products': [Products('investments')],
+            'country_codes': [CountryCode('US')],
+            'language': 'en'
+        }
+
+        # Only include redirect_uri if provided
+        if redirect_uri:
+            request_params['redirect_uri'] = redirect_uri
+
+        request = LinkTokenCreateRequest(**request_params)
 
         response = self.client.link_token_create(request)
         return response.to_dict()
