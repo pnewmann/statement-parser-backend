@@ -1335,7 +1335,7 @@ def create_link_token():
             return jsonify({'error': 'Plaid is not configured'}), 503
 
         user_id = int(get_jwt_identity())
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         redirect_uri = data.get('redirect_uri')
 
         result = plaid_client.create_link_token(user_id, redirect_uri)
