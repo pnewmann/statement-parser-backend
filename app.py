@@ -1761,17 +1761,18 @@ def calculate_risk_metrics(positions):
 
 
 def calculate_historical_performance(positions):
-    """Calculate historical returns and performance chart data for up to 5 years."""
+    """Calculate historical returns and performance chart data for up to 5 years with multiple benchmarks."""
     if not YFINANCE_AVAILABLE:
         return {
             'returns': {},
             'chart_data': None,
+            'benchmarks': {},
             'error': 'yfinance not available'
         }
 
     total_value = sum(p.get('value', 0) or 0 for p in positions)
     if total_value == 0:
-        return {'returns': {}, 'chart_data': None}
+        return {'returns': {}, 'chart_data': None, 'benchmarks': {}}
 
     # Get symbols with weights
     weights = {}
@@ -1788,7 +1789,7 @@ def calculate_historical_performance(positions):
             cash_weight = (pos.get('value', 0) or 0) / total_value
 
     if not weights:
-        return {'returns': {}, 'chart_data': None}
+        return {'returns': {}, 'chart_data': None, 'benchmarks': {}}
 
     try:
         # Get 5+ years of historical data
@@ -1797,9 +1798,13 @@ def calculate_historical_performance(positions):
 
         symbols = list(weights.keys())
 
-        # Download price data
+        # Benchmarks: S&P 500, Total Bond, Total World, 60/40 will be calculated
+        benchmark_symbols = ['SPY', 'AGG', 'VT']
+
+        # Download price data for portfolio and benchmarks
+        all_symbols = list(set(symbols + benchmark_symbols))
         data = yf.download(
-            symbols + ['SPY'],
+            all_symbols,
             start=start_date,
             end=end_date,
             progress=False,
@@ -1807,86 +1812,87 @@ def calculate_historical_performance(positions):
         )['Close']
 
         if data.empty:
-            return {'returns': {}, 'chart_data': None, 'error': 'No price data'}
+            return {'returns': {}, 'chart_data': None, 'benchmarks': {}, 'error': 'No price data'}
 
         # Handle single symbol case
-        if len(symbols) == 1 and 'SPY' not in symbols:
+        if isinstance(data, pd.Series):
             data = data.to_frame()
-            data.columns = [symbols[0]]
-            # Re-download with SPY
-            spy_data = yf.download('SPY', start=start_date, end=end_date, progress=False, auto_adjust=True)['Close']
-            data['SPY'] = spy_data
+            data.columns = [all_symbols[0]]
 
-        # Forward fill missing data so newer symbols don't truncate older ones
-        # This allows the portfolio to use available data for each symbol
+        # Forward fill missing data
         data = data.ffill().bfill()
 
-        # Calculate daily returns - don't drop all NaN rows, handle per-symbol
-        returns = data.pct_change()
-
-        # Drop only the first row (which is NaN due to pct_change)
-        returns = returns.iloc[1:]
+        # Calculate daily returns
+        returns = data.pct_change().iloc[1:]
 
         if returns.empty:
-            return {'returns': {}, 'chart_data': None}
+            return {'returns': {}, 'chart_data': None, 'benchmarks': {}}
 
         # Calculate portfolio returns (weighted)
-        # Fill any remaining NaN with 0 (no return for that day)
         portfolio_returns = pd.Series(0.0, index=returns.index)
         for symbol, weight in weights.items():
             if symbol in returns.columns:
                 symbol_returns = returns[symbol].fillna(0)
                 portfolio_returns += symbol_returns * weight
-        # Cash portion earns ~5% annual (approximate money market rate)
+        # Cash portion earns ~5% annual
         if cash_weight > 0:
             daily_cash_return = (1.05 ** (1/252)) - 1
             portfolio_returns += cash_weight * daily_cash_return
 
+        # Calculate benchmark returns
+        benchmark_returns = {}
+        benchmark_cumulative = {}
+
+        # S&P 500
+        if 'SPY' in returns.columns:
+            benchmark_returns['sp500'] = returns['SPY']
+            benchmark_cumulative['sp500'] = (1 + returns['SPY']).cumprod()
+
+        # Total Bond Market
+        if 'AGG' in returns.columns:
+            benchmark_returns['bonds'] = returns['AGG']
+            benchmark_cumulative['bonds'] = (1 + returns['AGG']).cumprod()
+
+        # Total World
+        if 'VT' in returns.columns:
+            benchmark_returns['world'] = returns['VT']
+            benchmark_cumulative['world'] = (1 + returns['VT']).cumprod()
+
+        # 60/40 Portfolio (60% SPY, 40% AGG)
+        if 'SPY' in returns.columns and 'AGG' in returns.columns:
+            sixty_forty = returns['SPY'] * 0.6 + returns['AGG'] * 0.4
+            benchmark_returns['sixty_forty'] = sixty_forty
+            benchmark_cumulative['sixty_forty'] = (1 + sixty_forty).cumprod()
+
         # Calculate cumulative returns for chart
         portfolio_cumulative = (1 + portfolio_returns).cumprod()
-        spy_cumulative = (1 + returns['SPY']).cumprod() if 'SPY' in returns.columns else None
 
         # Calculate period returns
         today = returns.index[-1]
         period_returns = {}
 
-        # Helper to calculate return over period
-        def calc_return(days_back):
+        def calc_return(cumulative, days_back):
             target_date = today - timedelta(days=days_back)
-            # Find closest available date
-            valid_dates = portfolio_cumulative.index[portfolio_cumulative.index <= target_date]
+            valid_dates = cumulative.index[cumulative.index <= target_date]
             if len(valid_dates) == 0:
-                return None, None
+                return None
             start_idx = valid_dates[-1]
-            port_ret = (portfolio_cumulative.iloc[-1] / portfolio_cumulative.loc[start_idx] - 1) * 100
-            spy_ret = None
-            if spy_cumulative is not None and start_idx in spy_cumulative.index:
-                spy_ret = (spy_cumulative.iloc[-1] / spy_cumulative.loc[start_idx] - 1) * 100
-            return round(float(port_ret), 2), round(float(spy_ret), 2) if spy_ret is not None else None
+            ret = (cumulative.iloc[-1] / cumulative.loc[start_idx] - 1) * 100
+            return round(float(ret), 2)
 
-        # 1 Month
-        port_1m, spy_1m = calc_return(30)
-        period_returns['1M'] = {'portfolio': port_1m, 'benchmark': spy_1m}
+        periods = [('1M', 30), ('3M', 90), ('6M', 180), ('1Y', 365), ('3Y', 1095), ('5Y', 1825)]
 
-        # 3 Month
-        port_3m, spy_3m = calc_return(90)
-        period_returns['3M'] = {'portfolio': port_3m, 'benchmark': spy_3m}
-
-        # 6 Month
-        port_6m, spy_6m = calc_return(180)
-        period_returns['6M'] = {'portfolio': port_6m, 'benchmark': spy_6m}
-
-        # 1 Year
-        port_1y, spy_1y = calc_return(365)
-        period_returns['1Y'] = {'portfolio': port_1y, 'benchmark': spy_1y}
-
-        # 3 Year
-        port_3y, spy_3y = calc_return(1095)
-        period_returns['3Y'] = {'portfolio': port_3y, 'benchmark': spy_3y}
-
-        # 5 Year
-        port_5y, spy_5y = calc_return(1825)
-        period_returns['5Y'] = {'portfolio': port_5y, 'benchmark': spy_5y}
+        for period_name, days in periods:
+            port_ret = calc_return(portfolio_cumulative, days)
+            period_returns[period_name] = {
+                'portfolio': port_ret,
+                'sp500': calc_return(benchmark_cumulative.get('sp500', pd.Series()), days) if 'sp500' in benchmark_cumulative else None,
+                'bonds': calc_return(benchmark_cumulative.get('bonds', pd.Series()), days) if 'bonds' in benchmark_cumulative else None,
+                'world': calc_return(benchmark_cumulative.get('world', pd.Series()), days) if 'world' in benchmark_cumulative else None,
+                'sixty_forty': calc_return(benchmark_cumulative.get('sixty_forty', pd.Series()), days) if 'sixty_forty' in benchmark_cumulative else None,
+                # Keep 'benchmark' for backwards compatibility
+                'benchmark': calc_return(benchmark_cumulative.get('sp500', pd.Series()), days) if 'sp500' in benchmark_cumulative else None
+            }
 
         # YTD
         year_start = datetime(today.year, 1, 1)
@@ -1894,45 +1900,176 @@ def calculate_historical_performance(positions):
         if len(valid_dates) > 0:
             start_idx = valid_dates[0]
             port_ytd = (portfolio_cumulative.iloc[-1] / portfolio_cumulative.loc[start_idx] - 1) * 100
-            spy_ytd = None
-            if spy_cumulative is not None:
-                spy_ytd = (spy_cumulative.iloc[-1] / spy_cumulative.loc[start_idx] - 1) * 100
+
+            def calc_ytd(cumulative):
+                if start_idx in cumulative.index:
+                    return round(float((cumulative.iloc[-1] / cumulative.loc[start_idx] - 1) * 100), 2)
+                return None
+
             period_returns['YTD'] = {
                 'portfolio': round(float(port_ytd), 2),
-                'benchmark': round(float(spy_ytd), 2) if spy_ytd is not None else None
+                'sp500': calc_ytd(benchmark_cumulative.get('sp500', pd.Series())) if 'sp500' in benchmark_cumulative else None,
+                'bonds': calc_ytd(benchmark_cumulative.get('bonds', pd.Series())) if 'bonds' in benchmark_cumulative else None,
+                'world': calc_ytd(benchmark_cumulative.get('world', pd.Series())) if 'world' in benchmark_cumulative else None,
+                'sixty_forty': calc_ytd(benchmark_cumulative.get('sixty_forty', pd.Series())) if 'sixty_forty' in benchmark_cumulative else None,
+                'benchmark': calc_ytd(benchmark_cumulative.get('sp500', pd.Series())) if 'sp500' in benchmark_cumulative else None
             }
         else:
-            period_returns['YTD'] = {'portfolio': None, 'benchmark': None}
+            period_returns['YTD'] = {'portfolio': None, 'sp500': None, 'bonds': None, 'world': None, 'sixty_forty': None, 'benchmark': None}
 
-        # Generate chart data for full available period (up to 5 years)
-        # Resample to weekly to reduce data points
+        # Generate chart data (weekly)
         portfolio_weekly = portfolio_cumulative.resample('W').last().dropna()
-        spy_weekly = spy_cumulative.resample('W').last().dropna() if spy_cumulative is not None else None
 
-        # Normalize to start at 100
+        chart_data = None
         if len(portfolio_weekly) > 0:
             portfolio_normalized = (portfolio_weekly / portfolio_weekly.iloc[0]) * 100
             chart_data = {
                 'labels': [d.strftime('%Y-%m-%d') for d in portfolio_normalized.index],
                 'portfolio': [round(float(v), 2) for v in portfolio_normalized.values],
             }
-            if spy_weekly is not None and len(spy_weekly) > 0:
-                spy_normalized = (spy_weekly / spy_weekly.iloc[0]) * 100
-                chart_data['benchmark'] = [round(float(v), 2) for v in spy_normalized.values]
-        else:
-            chart_data = None
+
+            # Add all benchmarks to chart
+            for bm_name, bm_cum in benchmark_cumulative.items():
+                bm_weekly = bm_cum.resample('W').last().dropna()
+                if len(bm_weekly) > 0:
+                    # Align to portfolio dates
+                    bm_aligned = bm_weekly.reindex(portfolio_weekly.index, method='ffill')
+                    if len(bm_aligned.dropna()) > 0:
+                        bm_normalized = (bm_aligned / bm_aligned.iloc[0]) * 100
+                        chart_data[bm_name] = [round(float(v), 2) if pd.notna(v) else None for v in bm_normalized.values]
+
+            # Keep 'benchmark' key for backwards compatibility (S&P 500)
+            if 'sp500' in chart_data:
+                chart_data['benchmark'] = chart_data['sp500']
 
         return {
             'returns': period_returns,
-            'chart_data': chart_data
+            'chart_data': chart_data,
+            'benchmarks': {
+                'sp500': {'name': 'S&P 500', 'symbol': 'SPY'},
+                'bonds': {'name': 'US Bonds', 'symbol': 'AGG'},
+                'world': {'name': 'Total World', 'symbol': 'VT'},
+                'sixty_forty': {'name': '60/40 Portfolio', 'symbol': 'SPY/AGG'}
+            }
         }
 
     except Exception as e:
         return {
             'returns': {},
             'chart_data': None,
+            'benchmarks': {},
             'error': str(e)
         }
+
+
+def calculate_projections(positions, allocations):
+    """Calculate portfolio projections using Capital Market Assumptions and Monte Carlo simulation."""
+    if not YFINANCE_AVAILABLE or np is None:
+        return {
+            'capital_market_assumptions': {},
+            'monte_carlo': None,
+            'error': 'numpy/yfinance not available'
+        }
+
+    total_value = sum(p.get('value', 0) or 0 for p in positions)
+    if total_value == 0:
+        return {'capital_market_assumptions': {}, 'monte_carlo': None}
+
+    # Capital Market Assumptions (10-year forward estimates)
+    # Based on typical institutional assumptions
+    CMA = {
+        'Stocks': {'expected_return': 0.07, 'volatility': 0.16},  # 7% return, 16% vol
+        'Bonds': {'expected_return': 0.04, 'volatility': 0.05},   # 4% return, 5% vol
+        'Cash': {'expected_return': 0.03, 'volatility': 0.01},    # 3% return, 1% vol
+        'Real Estate': {'expected_return': 0.06, 'volatility': 0.14},  # 6% return, 14% vol
+        'Crypto': {'expected_return': 0.10, 'volatility': 0.60},  # 10% return, 60% vol
+        'Commodities': {'expected_return': 0.04, 'volatility': 0.18}  # 4% return, 18% vol
+    }
+
+    # Get asset allocation
+    asset_alloc = allocations.get('asset_allocation', {})
+
+    # Calculate portfolio expected return and volatility
+    portfolio_return = 0
+    portfolio_vol_squared = 0
+
+    for asset_class, pct in asset_alloc.items():
+        weight = pct / 100
+        if asset_class in CMA:
+            portfolio_return += weight * CMA[asset_class]['expected_return']
+            # Simplified: assume no correlation for vol (conservative)
+            portfolio_vol_squared += (weight * CMA[asset_class]['volatility']) ** 2
+
+    portfolio_volatility = np.sqrt(portfolio_vol_squared)
+
+    # Monte Carlo Simulation
+    num_simulations = 1000
+    years = 10
+    months = years * 12
+
+    # Monthly parameters
+    monthly_return = portfolio_return / 12
+    monthly_vol = portfolio_volatility / np.sqrt(12)
+
+    # Run simulations
+    np.random.seed(42)  # For reproducibility
+    simulations = np.zeros((num_simulations, months + 1))
+    simulations[:, 0] = total_value
+
+    for i in range(num_simulations):
+        for m in range(1, months + 1):
+            random_return = np.random.normal(monthly_return, monthly_vol)
+            simulations[i, m] = simulations[i, m-1] * (1 + random_return)
+
+    # Calculate percentiles at each time point
+    percentiles = [5, 25, 50, 75, 95]
+    projection_data = {
+        'labels': [f'Year {y}' for y in range(years + 1)],
+        'percentiles': {}
+    }
+
+    # Sample yearly (every 12 months)
+    yearly_indices = [0] + [12 * y for y in range(1, years + 1)]
+
+    for p in percentiles:
+        values = [round(float(np.percentile(simulations[:, idx], p)), 0) for idx in yearly_indices]
+        projection_data['percentiles'][f'p{p}'] = values
+
+    # Calculate expected value path (using CMA)
+    expected_path = [total_value]
+    for y in range(1, years + 1):
+        expected_path.append(round(total_value * ((1 + portfolio_return) ** y), 0))
+    projection_data['expected'] = expected_path
+
+    # Summary statistics at 10 years
+    final_values = simulations[:, -1]
+    monte_carlo_summary = {
+        'median': round(float(np.median(final_values)), 0),
+        'mean': round(float(np.mean(final_values)), 0),
+        'p5': round(float(np.percentile(final_values, 5)), 0),
+        'p25': round(float(np.percentile(final_values, 25)), 0),
+        'p75': round(float(np.percentile(final_values, 75)), 0),
+        'p95': round(float(np.percentile(final_values, 95)), 0),
+        'min': round(float(np.min(final_values)), 0),
+        'max': round(float(np.max(final_values)), 0),
+        'prob_gain': round(float(np.sum(final_values > total_value) / num_simulations * 100), 1),
+        'prob_double': round(float(np.sum(final_values > total_value * 2) / num_simulations * 100), 1)
+    }
+
+    return {
+        'capital_market_assumptions': {
+            'expected_annual_return': round(portfolio_return * 100, 2),
+            'expected_volatility': round(portfolio_volatility * 100, 2),
+            'assumptions': {k: {'return': v['expected_return'] * 100, 'volatility': v['volatility'] * 100} for k, v in CMA.items()}
+        },
+        'monte_carlo': {
+            'simulations': num_simulations,
+            'years': years,
+            'starting_value': total_value,
+            'projection_data': projection_data,
+            'summary': monte_carlo_summary
+        }
+    }
 
 
 def calculate_scenario_analysis(positions, allocations):
@@ -2403,6 +2540,7 @@ def analyze_portfolio():
         if include_risk:
             risk_metrics = calculate_risk_metrics(positions)
             historical_performance = calculate_historical_performance(positions)
+            projections = calculate_projections(positions, allocations)
         else:
             risk_metrics = {
                 'volatility': None,
@@ -2411,6 +2549,7 @@ def analyze_portfolio():
                 'max_drawdown': None
             }
             historical_performance = {'returns': {}, 'chart_data': None}
+            projections = {'capital_market_assumptions': {}, 'monte_carlo': None}
 
         # Calculate scenario analysis
         scenario_analysis = calculate_scenario_analysis(positions, allocations)
@@ -2435,7 +2574,8 @@ def analyze_portfolio():
             'concentration': concentration,
             'risk_metrics': risk_metrics,
             'historical_performance': historical_performance,
-            'scenario_analysis': scenario_analysis
+            'scenario_analysis': scenario_analysis,
+            'projections': projections
         })
 
     except Exception as e:
