@@ -2972,12 +2972,16 @@ def generate_report_html(data, report_date):
     total_value = data.get('total_value', 0)
     positions = data.get('positions', [])
     asset_allocation = data.get('asset_allocation', {})
+    sub_asset_allocation = data.get('sub_asset_allocation', {})
     sector_exposure = data.get('sector_exposure', {})
+    sector_benchmark = data.get('sector_benchmark', {})
     geography = data.get('geography', {})
     concentration = data.get('concentration', {})
     risk_metrics = data.get('risk_metrics', {})
     insights = data.get('insights', [])
     projections = data.get('projections', {})
+    historical_performance = data.get('historical_performance', {})
+    benchmark_comparison = data.get('benchmark_comparison', {})
 
     # Format helpers
     def fmt_currency(val):
@@ -2990,6 +2994,12 @@ def generate_report_html(data, report_date):
             return 'N/A'
         return f"{val:.1f}%"
 
+    def fmt_pct_change(val):
+        if val is None:
+            return 'N/A'
+        sign = '+' if val >= 0 else ''
+        return f"{sign}{val:.1f}%"
+
     # Risk metrics
     volatility = risk_metrics.get('volatility')
     beta = risk_metrics.get('beta')
@@ -3000,8 +3010,117 @@ def generate_report_html(data, report_date):
     mc_data = projections.get('monte_carlo', {})
     mc_summary = mc_data.get('summary', {})
 
+    # Monte Carlo additional metrics
+    mc_prob_gain = mc_data.get('probability_of_gain')
+    mc_chance_double = mc_data.get('chance_to_double')
+    mc_implied_cagr = mc_data.get('implied_cagr')
+    mc_simulations = mc_data.get('simulations', 1000)
+
     # Colors for charts
     colors = ['#635bff', '#30d158', '#ff9f0a', '#ff453a', '#5e5ce6', '#64d2ff', '#bf5af2', '#ff375f']
+
+    # Build historical performance rows
+    perf_periods = ['1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y']
+    perf_rows = ""
+    for period in perf_periods:
+        port_val = historical_performance.get(period)
+        bench_val = benchmark_comparison.get(period)
+        port_color = '#30d158' if port_val and port_val >= 0 else '#ff453a'
+        bench_color = '#30d158' if bench_val and bench_val >= 0 else '#ff453a'
+        perf_rows += f'''
+            <td style="text-align: center; padding: 10px; background: #f8f9fc;">
+                <div style="font-size: 8px; color: #666; margin-bottom: 4px;">{period}</div>
+                <div style="font-size: 14px; font-weight: 700; color: {port_color};">{fmt_pct_change(port_val) if port_val is not None else 'N/A'}</div>
+                <div style="font-size: 8px; color: {bench_color};">S&P: {fmt_pct_change(bench_val) if bench_val is not None else 'N/A'}</div>
+            </td>
+        '''
+
+    # Build sub-asset allocation rows
+    sub_asset_rows = ""
+    if sub_asset_allocation:
+        sub_sorted = sorted(sub_asset_allocation.items(), key=lambda x: x[1], reverse=True)
+        max_sub = sub_sorted[0][1] if sub_sorted else 100
+        for i, (sub_class, pct) in enumerate(sub_sorted):
+            if pct > 0:
+                color = colors[i % len(colors)]
+                value = total_value * pct / 100 if total_value else 0
+                bar_width = (pct / max_sub) * 100
+                sub_asset_rows += f'''
+                    <tr>
+                        <td style="width: 20px;"><div style="width: 10px; height: 10px; background: {color}; border-radius: 2px;"></div></td>
+                        <td style="font-size: 8px;">{sub_class}</td>
+                        <td class="number" style="font-size: 8px;">{pct:.1f}%</td>
+                        <td class="number" style="font-size: 8px;">{fmt_currency(value)}</td>
+                        <td style="width: 35%;">
+                            <div style="background: #f0f0f0; height: 8px; border-radius: 2px;">
+                                <div style="background: {color}; height: 8px; width: {bar_width}%; border-radius: 2px;"></div>
+                            </div>
+                        </td>
+                    </tr>
+                '''
+
+    # Build Top 10 holdings rows
+    top10_rows = ""
+    sorted_positions = sorted(positions, key=lambda x: x.get('value', 0), reverse=True)
+    for i, pos in enumerate(sorted_positions[:10]):
+        symbol = pos.get('symbol', 'N/A')
+        value = pos.get('value', 0)
+        pct = (value / total_value * 100) if total_value else 0
+        bar_width = min(pct * 2, 100)
+        top10_rows += f'''
+            <tr>
+                <td style="text-align: center; font-weight: 600; color: #635bff;">{i + 1}</td>
+                <td style="font-weight: 600;">{symbol}</td>
+                <td class="number">{fmt_currency(value)}</td>
+                <td class="number">{pct:.2f}%</td>
+                <td style="width: 30%;">
+                    <div style="background: #e8eaf6; height: 10px; border-radius: 2px;">
+                        <div style="background: #635bff; height: 10px; width: {bar_width}%; border-radius: 2px;"></div>
+                    </div>
+                </td>
+            </tr>
+        '''
+
+    # Build sector comparison rows (portfolio vs benchmark)
+    sp500_sectors = {
+        'Technology': 30.0, 'Healthcare': 13.0, 'Financials': 12.5, 'Consumer Discretionary': 10.5,
+        'Communication Services': 8.5, 'Industrials': 8.0, 'Consumer Staples': 6.5,
+        'Energy': 4.0, 'Utilities': 2.5, 'Real Estate': 2.5, 'Materials': 2.0
+    }
+    sector_compare_rows = ""
+    all_sectors = set(sector_exposure.keys()) | set(sector_benchmark.keys() if sector_benchmark else sp500_sectors.keys())
+    sector_data = []
+    for sector in all_sectors:
+        port_pct = sector_exposure.get(sector, 0)
+        bench_pct = sector_benchmark.get(sector, sp500_sectors.get(sector, 0)) if sector_benchmark else sp500_sectors.get(sector, 0)
+        if port_pct > 0 or bench_pct > 0:
+            sector_data.append((sector, port_pct, bench_pct))
+    sector_data.sort(key=lambda x: x[1], reverse=True)
+    max_sector_pct = max([max(s[1], s[2]) for s in sector_data]) if sector_data else 100
+
+    for sector, port_pct, bench_pct in sector_data[:10]:
+        port_width = (port_pct / max_sector_pct) * 100 if max_sector_pct else 0
+        bench_width = (bench_pct / max_sector_pct) * 100 if max_sector_pct else 0
+        diff = port_pct - bench_pct
+        diff_color = '#30d158' if diff >= 0 else '#ff453a'
+        sector_compare_rows += f'''
+            <tr>
+                <td style="font-size: 8px;">{sector}</td>
+                <td style="width: 25%;">
+                    <div style="background: #e8eaf6; height: 12px; border-radius: 2px;">
+                        <div style="background: #635bff; height: 12px; width: {port_width}%; border-radius: 2px;"></div>
+                    </div>
+                </td>
+                <td class="number" style="font-size: 8px;">{port_pct:.1f}%</td>
+                <td style="width: 25%;">
+                    <div style="background: #fff3e0; height: 12px; border-radius: 2px;">
+                        <div style="background: #ff9f0a; height: 12px; width: {bench_width}%; border-radius: 2px;"></div>
+                    </div>
+                </td>
+                <td class="number" style="font-size: 8px;">{bench_pct:.1f}%</td>
+                <td class="number" style="font-size: 8px; color: {diff_color};">{diff:+.1f}%</td>
+            </tr>
+        '''
 
     # Build allocation table rows with horizontal bars
     allocation_sorted = sorted(asset_allocation.items(), key=lambda x: x[1], reverse=True)
@@ -3585,7 +3704,7 @@ def generate_report_html(data, report_date):
             </div>
         </div>
 
-        <!-- Page 2: Executive Overview -->
+        <!-- Page 2: Executive Overview & Performance -->
         <div class="content-page">
             <div class="page-header">
                 <span class="page-header-logo"></span>
@@ -3619,10 +3738,24 @@ def generate_report_html(data, report_date):
             </table>
 
             <div class="section-header">
+                <h2>Historical Performance</h2>
+            </div>
+
+            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
+                Portfolio returns vs S&P 500 benchmark across multiple time periods.
+            </p>
+
+            <table style="margin-bottom: 20px; border-collapse: separate; border-spacing: 4px;">
+                <tr>
+                    {perf_rows}
+                </tr>
+            </table>
+
+            <div class="section-header">
                 <h2>Asset Allocation</h2>
             </div>
 
-            <table style="margin-bottom: 20px;">
+            <table style="margin-bottom: 16px;">
                 <thead>
                     <tr>
                         <th style="width: 20px;"></th>
@@ -3636,6 +3769,40 @@ def generate_report_html(data, report_date):
                     {allocation_rows}
                 </tbody>
             </table>
+
+            {f'''
+            <div class="section-header">
+                <h2>Sub-Asset Breakdown</h2>
+            </div>
+
+            <table style="margin-bottom: 16px;">
+                <thead>
+                    <tr>
+                        <th style="width: 20px;"></th>
+                        <th>Category</th>
+                        <th class="number">Weight</th>
+                        <th class="number">Value</th>
+                        <th>Distribution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {sub_asset_rows}
+                </tbody>
+            </table>
+            ''' if sub_asset_rows else ''}
+
+            <div class="page-footer">
+                Page 2 | Generated {report_date} | This report is for informational purposes only
+            </div>
+        </div>
+
+        <!-- Page 3: Allocation Details -->
+        <div class="content-page">
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
+            </div>
 
             <table class="two-col-table">
                 <tr>
@@ -3676,12 +3843,36 @@ def generate_report_html(data, report_date):
                 </tr>
             </table>
 
+            <div class="section-header">
+                <h2>Sector Comparison vs S&amp;P 500</h2>
+            </div>
+
+            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
+                Your portfolio sector weights compared to the S&amp;P 500 benchmark.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Sector</th>
+                        <th style="text-align: center;">Portfolio</th>
+                        <th class="number">%</th>
+                        <th style="text-align: center;">S&amp;P 500</th>
+                        <th class="number">%</th>
+                        <th class="number">Diff</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {sector_compare_rows}
+                </tbody>
+            </table>
+
             <div class="page-footer">
-                Page 2 | Generated {report_date} | This report is for informational purposes only
+                Page 3 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
 
-        <!-- Page 3: Risk Analysis -->
+        <!-- Page 4: Risk Analysis -->
         <div class="content-page">
             <div class="page-header">
                 <span class="page-header-logo"></span>
@@ -3741,11 +3932,34 @@ def generate_report_html(data, report_date):
             </table>
 
             <div class="section-header">
+                <h2>Top 10 Holdings (Concentration Risk)</h2>
+            </div>
+
+            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
+                Your largest positions by market value. Top 10 concentration: {fmt_pct(concentration.get('top_10_weight'))}
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 8%;">Rank</th>
+                        <th>Symbol</th>
+                        <th class="number">Value</th>
+                        <th class="number">Weight</th>
+                        <th>Concentration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {top10_rows}
+                </tbody>
+            </table>
+
+            <div class="section-header">
                 <h2>Scenario Analysis</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 12px;">
-                Hypothetical portfolio performance under historical and projected market scenarios. Estimates based on portfolio beta and historical correlations.
+            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
+                Hypothetical portfolio performance under historical and projected market scenarios.
             </p>
 
             <table>
@@ -3762,36 +3976,126 @@ def generate_report_html(data, report_date):
                 </tbody>
             </table>
 
-            {f'''
-            <div class="section-header" style="margin-top: 20px;">
-                <h2>Projected Growth (Monte Carlo)</h2>
+            <div class="page-footer">
+                Page 4 | Generated {report_date} | This report is for informational purposes only
+            </div>
+        </div>
+
+        <!-- Page 5: Projections -->
+        <div class="content-page">
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 12px;">
-                Simulated portfolio values based on 1,000 random scenarios using historical return patterns.
+            <div class="section-header">
+                <h2>10-Year Projections (Monte Carlo Simulation)</h2>
+            </div>
+
+            <p style="font-size: 8px; color: #666; margin-bottom: 16px;">
+                Simulated portfolio values based on {mc_simulations:,} random scenarios using historical return patterns and volatility assumptions.
             </p>
 
+            <table class="metrics-table" style="margin-bottom: 20px;">
+                <tr>
+                    <td>
+                        <div class="metric-label">Simulations Run</div>
+                        <div class="metric-value">{mc_simulations:,}</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">Starting Value</div>
+                        <div class="metric-value">{fmt_currency(total_value)}</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">Probability of Gain</div>
+                        <div class="metric-value" style="color: #30d158;">{fmt_pct(mc_prob_gain) if mc_prob_gain is not None else 'N/A'}</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">Chance to Double</div>
+                        <div class="metric-value">{fmt_pct(mc_chance_double) if mc_chance_double is not None else 'N/A'}</div>
+                    </td>
+                </tr>
+            </table>
+
+            {f'''
+            <table class="metrics-table" style="margin-bottom: 20px;">
+                <tr>
+                    <td>
+                        <div class="metric-label">Implied CAGR (Median)</div>
+                        <div class="metric-value" style="color: #635bff;">{fmt_pct(mc_implied_cagr) if mc_implied_cagr is not None else 'N/A'}</div>
+                        <div class="metric-subtext">Compound Annual Growth Rate</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">10-Year Median Value</div>
+                        <div class="metric-value">{fmt_currency(mc_summary.get("year_10", {}).get("median"))}</div>
+                        <div class="metric-subtext">50th percentile outcome</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">10-Year Best Case</div>
+                        <div class="metric-value" style="color: #30d158;">{fmt_currency(mc_summary.get("year_10", {}).get("percentile_90"))}</div>
+                        <div class="metric-subtext">90th percentile outcome</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">10-Year Worst Case</div>
+                        <div class="metric-value" style="color: #ff453a;">{fmt_currency(mc_summary.get("year_10", {}).get("percentile_10"))}</div>
+                        <div class="metric-subtext">10th percentile outcome</div>
+                    </td>
+                </tr>
+            </table>
+            ''' if mc_summary else ''}
+
+            <div class="section-header">
+                <h2>Projected Values by Year</h2>
+            </div>
+
+            {f'''
             <table>
                 <thead>
                     <tr>
                         <th>Time Horizon</th>
-                        <th class="number">10th Percentile (Bear)</th>
-                        <th class="number">50th Percentile (Base)</th>
-                        <th class="number">90th Percentile (Bull)</th>
+                        <th class="number">5th Percentile (Worst)</th>
+                        <th class="number">25th Percentile</th>
+                        <th class="number">50th Percentile (Median)</th>
+                        <th class="number">75th Percentile</th>
+                        <th class="number">95th Percentile (Best)</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {mc_rows}
+                    <tr>
+                        <td>Year 1</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_1", {}).get("percentile_5"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_1", {}).get("percentile_25"))}</td>
+                        <td class="number" style="font-weight: 600;">{fmt_currency(mc_summary.get("year_1", {}).get("median"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_1", {}).get("percentile_75"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_1", {}).get("percentile_95"))}</td>
+                    </tr>
+                    <tr style="background: #fafafa;">
+                        <td>Year 5</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_5", {}).get("percentile_5"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_5", {}).get("percentile_25"))}</td>
+                        <td class="number" style="font-weight: 600;">{fmt_currency(mc_summary.get("year_5", {}).get("median"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_5", {}).get("percentile_75"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_5", {}).get("percentile_95"))}</td>
+                    </tr>
+                    <tr>
+                        <td>Year 10</td>
+                        <td class="number" style="color: #ff453a;">{fmt_currency(mc_summary.get("year_10", {}).get("percentile_5"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_10", {}).get("percentile_25"))}</td>
+                        <td class="number" style="font-weight: 600;">{fmt_currency(mc_summary.get("year_10", {}).get("median"))}</td>
+                        <td class="number">{fmt_currency(mc_summary.get("year_10", {}).get("percentile_75"))}</td>
+                        <td class="number" style="color: #30d158;">{fmt_currency(mc_summary.get("year_10", {}).get("percentile_95"))}</td>
+                    </tr>
                 </tbody>
             </table>
-            ''' if mc_rows else ''}
+            ''' if mc_summary else '<p style="color: #666; font-size: 9px;">Monte Carlo projections not available for this portfolio.</p>'}
 
             <div class="page-footer">
-                Page 3 | Generated {report_date} | This report is for informational purposes only
+                Page 5 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
 
-        <!-- Page 4: Key Insights -->
+        <!-- Page 6: Key Insights -->
         {f'''
         <div class="content-page">
             <div class="page-header">
@@ -3809,12 +4113,12 @@ def generate_report_html(data, report_date):
             </table>
 
             <div class="page-footer">
-                Page 4 | Generated {report_date} | This report is for informational purposes only
+                Page 6 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
         ''' if insights_rows else ''}
 
-        <!-- Page 5+: Holdings Detail -->
+        <!-- Page 7+: Holdings Detail -->
         <div class="content-page">
             <div class="page-header">
                 <span class="page-header-logo"></span>
@@ -3846,7 +4150,7 @@ def generate_report_html(data, report_date):
             </table>
 
             <div class="page-footer">
-                Page 5 | Generated {report_date} | This report is for informational purposes only
+                Page 7 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
 
@@ -3856,10 +4160,6 @@ def generate_report_html(data, report_date):
                 <span class="page-header-logo"></span>
                 <span class="page-header-brand">Statement Scan</span>
                 <span class="page-header-title">Portfolio Analysis Report</span>
-            </div>
-
-            <div class="section-header">
-                <h2>Glossary of Terms</h2>
             </div>
 
             <table class="glossary-table">
@@ -3904,7 +4204,7 @@ def generate_report_html(data, report_date):
             </div>
 
             <div class="page-footer">
-                Page 6 | Generated {report_date} | This report is for informational purposes only
+                Glossary | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
     </body>
