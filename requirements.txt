@@ -11,3 +11,4 @@ gunicorn==21.2.0
 yfinance>=0.2.40
 pandas>=2.2.0
 numpy>=1.26.0
+weasyprint>=60.0

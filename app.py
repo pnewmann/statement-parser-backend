@@ -15,7 +15,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required,
@@ -37,6 +37,13 @@ except ImportError:
     YFINANCE_AVAILABLE = False
     pd = None
     np = None
+
+# Try to import weasyprint for PDF generation
+try:
+    from weasyprint import HTML, CSS
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -2953,6 +2960,562 @@ def analyze_portfolio():
 
     except Exception as e:
         return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
+
+
+# =============================================================================
+# PDF REPORT GENERATION
+# =============================================================================
+
+def generate_report_html(data, report_date):
+    """Generate HTML for the portfolio report."""
+
+    total_value = data.get('total_value', 0)
+    positions = data.get('positions', [])
+    asset_allocation = data.get('asset_allocation', {})
+    sector_exposure = data.get('sector_exposure', {})
+    geography = data.get('geography', {})
+    concentration = data.get('concentration', {})
+    risk_metrics = data.get('risk_metrics', {})
+    insights = data.get('insights', [])
+    projections = data.get('projections', {})
+
+    # Format currency
+    def fmt_currency(val):
+        if val is None:
+            return 'N/A'
+        return f"${val:,.2f}"
+
+    def fmt_pct(val):
+        if val is None:
+            return 'N/A'
+        return f"{val:.1f}%"
+
+    # Build positions table rows
+    positions_rows = ""
+    sorted_positions = sorted(positions, key=lambda x: x.get('value', 0), reverse=True)[:20]
+    for pos in sorted_positions:
+        symbol = pos.get('symbol', 'N/A')
+        description = pos.get('description', '')[:30]
+        shares = pos.get('shares', 0)
+        price = pos.get('price', 0)
+        value = pos.get('value', 0)
+        pct = (value / total_value * 100) if total_value else 0
+        positions_rows += f"""
+            <tr>
+                <td><strong>{symbol}</strong><br><span class="description">{description}</span></td>
+                <td class="number">{shares:,.2f}</td>
+                <td class="number">{fmt_currency(price)}</td>
+                <td class="number">{fmt_currency(value)}</td>
+                <td class="number">{pct:.1f}%</td>
+            </tr>
+        """
+
+    # Build asset allocation rows
+    allocation_rows = ""
+    for asset_class, pct in sorted(asset_allocation.items(), key=lambda x: x[1], reverse=True):
+        if pct > 0:
+            allocation_rows += f"""
+                <tr>
+                    <td>{asset_class}</td>
+                    <td class="number">{pct:.1f}%</td>
+                    <td>
+                        <div class="bar-container">
+                            <div class="bar" style="width: {min(pct, 100)}%;"></div>
+                        </div>
+                    </td>
+                </tr>
+            """
+
+    # Build sector rows
+    sector_rows = ""
+    for sector, pct in sorted(sector_exposure.items(), key=lambda x: x[1], reverse=True)[:8]:
+        if pct > 0:
+            sector_rows += f"""
+                <tr>
+                    <td>{sector}</td>
+                    <td class="number">{pct:.1f}%</td>
+                    <td>
+                        <div class="bar-container">
+                            <div class="bar sector-bar" style="width: {min(pct, 100)}%;"></div>
+                        </div>
+                    </td>
+                </tr>
+            """
+
+    # Build geography rows
+    geo_rows = ""
+    for region, pct in sorted(geography.items(), key=lambda x: x[1], reverse=True)[:6]:
+        if pct > 0:
+            geo_rows += f"""
+                <tr>
+                    <td>{region}</td>
+                    <td class="number">{pct:.1f}%</td>
+                    <td>
+                        <div class="bar-container">
+                            <div class="bar geo-bar" style="width: {min(pct, 100)}%;"></div>
+                        </div>
+                    </td>
+                </tr>
+            """
+
+    # Build insights section
+    insights_html = ""
+    for insight in insights[:6]:
+        insight_type = insight.get('type', 'info')
+        icon = "ℹ️" if insight_type == 'info' else "⚠️" if insight_type == 'warning' else "✓"
+        border_color = "#635bff" if insight_type == 'info' else "#ffd60a" if insight_type == 'warning' else "#30d158"
+        insights_html += f"""
+            <div class="insight" style="border-left-color: {border_color};">
+                <div class="insight-title">{icon} {insight.get('title', '')}</div>
+                <div class="insight-text">{insight.get('text', '')}</div>
+            </div>
+        """
+
+    # Risk metrics
+    volatility = risk_metrics.get('volatility')
+    beta = risk_metrics.get('beta')
+    sharpe = risk_metrics.get('sharpe_ratio')
+    max_dd = risk_metrics.get('max_drawdown')
+
+    # Monte Carlo projections
+    mc_data = projections.get('monte_carlo', {})
+    mc_summary = mc_data.get('summary', {})
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Portfolio Report</title>
+        <style>
+            @page {{
+                size: letter;
+                margin: 0.75in;
+                @top-right {{
+                    content: "Page " counter(page) " of " counter(pages);
+                    font-size: 9px;
+                    color: #666;
+                }}
+            }}
+
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                font-size: 10px;
+                line-height: 1.5;
+                color: #0a2540;
+            }}
+
+            .header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                margin-bottom: 24px;
+                padding-bottom: 16px;
+                border-bottom: 2px solid #635bff;
+            }}
+
+            .logo {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+
+            .logo-icon {{
+                width: 32px;
+                height: 32px;
+                background: #635bff;
+                border-radius: 6px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+
+            .logo-icon svg {{
+                width: 20px;
+                height: 20px;
+            }}
+
+            .brand-name {{
+                font-size: 16px;
+                font-weight: 700;
+                color: #0a2540;
+            }}
+
+            .brand-tagline {{
+                font-size: 8px;
+                color: #666;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+
+            .report-meta {{
+                text-align: right;
+                font-size: 9px;
+                color: #666;
+            }}
+
+            .report-title {{
+                font-size: 11px;
+                font-weight: 600;
+                color: #0a2540;
+                margin-bottom: 2px;
+            }}
+
+            .summary-box {{
+                background: linear-gradient(135deg, #635bff 0%, #4f46e5 100%);
+                color: white;
+                border-radius: 8px;
+                padding: 20px;
+                margin-bottom: 24px;
+            }}
+
+            .summary-title {{
+                font-size: 11px;
+                opacity: 0.9;
+                margin-bottom: 4px;
+            }}
+
+            .summary-value {{
+                font-size: 28px;
+                font-weight: 700;
+                margin-bottom: 12px;
+            }}
+
+            .summary-stats {{
+                display: flex;
+                gap: 24px;
+            }}
+
+            .summary-stat {{
+                font-size: 9px;
+            }}
+
+            .summary-stat-value {{
+                font-size: 14px;
+                font-weight: 600;
+            }}
+
+            .section {{
+                margin-bottom: 20px;
+            }}
+
+            .section-title {{
+                font-size: 12px;
+                font-weight: 700;
+                color: #0a2540;
+                margin-bottom: 10px;
+                padding-bottom: 4px;
+                border-bottom: 1px solid #e3e8ee;
+            }}
+
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 9px;
+            }}
+
+            th {{
+                text-align: left;
+                padding: 8px 6px;
+                background: #f6f9fc;
+                font-weight: 600;
+                color: #425466;
+                border-bottom: 1px solid #e3e8ee;
+            }}
+
+            td {{
+                padding: 8px 6px;
+                border-bottom: 1px solid #f0f0f0;
+                vertical-align: top;
+            }}
+
+            .number {{
+                text-align: right;
+                font-variant-numeric: tabular-nums;
+            }}
+
+            .description {{
+                font-size: 8px;
+                color: #666;
+            }}
+
+            .bar-container {{
+                width: 100%;
+                height: 8px;
+                background: #f0f0f0;
+                border-radius: 4px;
+                overflow: hidden;
+            }}
+
+            .bar {{
+                height: 100%;
+                background: #635bff;
+                border-radius: 4px;
+            }}
+
+            .sector-bar {{
+                background: #30d158;
+            }}
+
+            .geo-bar {{
+                background: #ff9f0a;
+            }}
+
+            .two-column {{
+                display: flex;
+                gap: 20px;
+            }}
+
+            .two-column > div {{
+                flex: 1;
+            }}
+
+            .risk-grid {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 12px;
+                margin-bottom: 16px;
+            }}
+
+            .risk-card {{
+                background: #f6f9fc;
+                border-radius: 6px;
+                padding: 12px;
+                text-align: center;
+            }}
+
+            .risk-label {{
+                font-size: 8px;
+                color: #666;
+                text-transform: uppercase;
+                margin-bottom: 4px;
+            }}
+
+            .risk-value {{
+                font-size: 16px;
+                font-weight: 700;
+                color: #0a2540;
+            }}
+
+            .insight {{
+                background: #fafafa;
+                border-left: 3px solid #635bff;
+                padding: 10px 12px;
+                margin-bottom: 8px;
+                border-radius: 0 4px 4px 0;
+            }}
+
+            .insight-title {{
+                font-weight: 600;
+                font-size: 9px;
+                margin-bottom: 2px;
+            }}
+
+            .insight-text {{
+                font-size: 8px;
+                color: #425466;
+                line-height: 1.4;
+            }}
+
+            .footer {{
+                margin-top: 24px;
+                padding-top: 12px;
+                border-top: 1px solid #e3e8ee;
+                font-size: 8px;
+                color: #666;
+                text-align: center;
+            }}
+
+            .page-break {{
+                page-break-before: always;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="0" y="0" width="24" height="24" rx="4" fill="white"/>
+                        <rect x="20" y="20" width="24" height="24" rx="4" fill="white"/>
+                        <rect x="0" y="19" width="44" height="6" fill="white" opacity="0.4"/>
+                        <rect x="16" y="16" width="12" height="12" rx="2" fill="white"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="brand-name">Statement Scan</div>
+                    <div class="brand-tagline">Portfolio Intelligence</div>
+                </div>
+            </div>
+            <div class="report-meta">
+                <div class="report-title">Portfolio Analysis Report</div>
+                <div>Generated: {report_date}</div>
+            </div>
+        </div>
+
+        <div class="summary-box">
+            <div class="summary-title">Total Portfolio Value</div>
+            <div class="summary-value">{fmt_currency(total_value)}</div>
+            <div class="summary-stats">
+                <div class="summary-stat">
+                    <div>Holdings</div>
+                    <div class="summary-stat-value">{len(positions)}</div>
+                </div>
+                <div class="summary-stat">
+                    <div>Top 10 Concentration</div>
+                    <div class="summary-stat-value">{fmt_pct(concentration.get('top_10_weight'))}</div>
+                </div>
+                <div class="summary-stat">
+                    <div>Volatility</div>
+                    <div class="summary-stat-value">{fmt_pct(volatility) if volatility else 'N/A'}</div>
+                </div>
+                <div class="summary-stat">
+                    <div>Sharpe Ratio</div>
+                    <div class="summary-stat-value">{f'{sharpe:.2f}' if sharpe else 'N/A'}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Asset Allocation</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">Asset Class</th>
+                        <th style="width: 15%;" class="number">Weight</th>
+                        <th style="width: 55%;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {allocation_rows}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="two-column">
+            <div class="section">
+                <div class="section-title">Sector Exposure</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sector</th>
+                            <th class="number">Weight</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {sector_rows}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Geographic Distribution</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Region</th>
+                            <th class="number">Weight</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {geo_rows}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Risk Metrics</div>
+            <div class="risk-grid">
+                <div class="risk-card">
+                    <div class="risk-label">Volatility</div>
+                    <div class="risk-value">{fmt_pct(volatility) if volatility else 'N/A'}</div>
+                </div>
+                <div class="risk-card">
+                    <div class="risk-label">Beta</div>
+                    <div class="risk-value">{f'{beta:.2f}' if beta else 'N/A'}</div>
+                </div>
+                <div class="risk-card">
+                    <div class="risk-label">Sharpe Ratio</div>
+                    <div class="risk-value">{f'{sharpe:.2f}' if sharpe else 'N/A'}</div>
+                </div>
+                <div class="risk-card">
+                    <div class="risk-label">Max Drawdown</div>
+                    <div class="risk-value">{fmt_pct(max_dd) if max_dd else 'N/A'}</div>
+                </div>
+            </div>
+        </div>
+
+        {'<div class="section"><div class="section-title">Key Insights</div>' + insights_html + '</div>' if insights_html else ''}
+
+        <div class="page-break"></div>
+
+        <div class="section">
+            <div class="section-title">Holdings Detail (Top 20)</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 35%;">Security</th>
+                        <th class="number">Shares</th>
+                        <th class="number">Price</th>
+                        <th class="number">Value</th>
+                        <th class="number">Weight</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {positions_rows}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <p>This report is for informational purposes only and does not constitute financial advice.</p>
+            <p>Generated by Statement Scan • {report_date}</p>
+        </div>
+    </body>
+    </html>
+    """
+
+    return html
+
+
+@app.route('/report/pdf', methods=['POST'])
+def generate_pdf_report():
+    """Generate a PDF report of the portfolio analysis."""
+    if not WEASYPRINT_AVAILABLE:
+        return jsonify({'error': 'PDF generation is not available'}), 503
+
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        # Generate report date
+        report_date = datetime.now().strftime('%B %d, %Y')
+
+        # Generate HTML
+        html_content = generate_report_html(data, report_date)
+
+        # Convert to PDF
+        pdf_bytes = HTML(string=html_content).write_pdf()
+
+        # Return PDF as response
+        response = Response(pdf_bytes, mimetype='application/pdf')
+        response.headers['Content-Disposition'] = f'attachment; filename="portfolio-report-{datetime.now().strftime("%Y%m%d")}.pdf"'
+
+        return response
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate PDF: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
