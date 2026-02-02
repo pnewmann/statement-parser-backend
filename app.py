@@ -2967,7 +2967,7 @@ def analyze_portfolio():
 # =============================================================================
 
 def generate_report_html(data, report_date):
-    """Generate professional HTML for the portfolio report inspired by BlackRock reports."""
+    """Generate professional HTML for the portfolio report - WeasyPrint compatible."""
 
     total_value = data.get('total_value', 0)
     positions = data.get('positions', [])
@@ -2978,7 +2978,6 @@ def generate_report_html(data, report_date):
     risk_metrics = data.get('risk_metrics', {})
     insights = data.get('insights', [])
     projections = data.get('projections', {})
-    benchmark = data.get('benchmark', {})
 
     # Format helpers
     def fmt_currency(val):
@@ -2990,11 +2989,6 @@ def generate_report_html(data, report_date):
         if val is None:
             return 'N/A'
         return f"{val:.1f}%"
-
-    def fmt_number(val, decimals=2):
-        if val is None:
-            return 'N/A'
-        return f"{val:,.{decimals}f}"
 
     # Risk metrics
     volatility = risk_metrics.get('volatility')
@@ -3009,130 +3003,140 @@ def generate_report_html(data, report_date):
     # Colors for charts
     colors = ['#635bff', '#30d158', '#ff9f0a', '#ff453a', '#5e5ce6', '#64d2ff', '#bf5af2', '#ff375f']
 
-    # Build donut chart segments for asset allocation (CSS-based)
+    # Build allocation table rows with horizontal bars
     allocation_sorted = sorted(asset_allocation.items(), key=lambda x: x[1], reverse=True)
-    donut_segments = ""
-    cumulative = 0
-    for i, (asset_class, pct) in enumerate(allocation_sorted):
-        if pct > 0:
-            color = colors[i % len(colors)]
-            donut_segments += f"{color} {cumulative}% {cumulative + pct}%, "
-            cumulative += pct
-
-    # Build allocation legend items
-    allocation_legend = ""
+    max_alloc = allocation_sorted[0][1] if allocation_sorted else 100
+    allocation_rows = ""
     for i, (asset_class, pct) in enumerate(allocation_sorted):
         if pct > 0:
             color = colors[i % len(colors)]
             value = total_value * pct / 100 if total_value else 0
-            allocation_legend += f'''
-                <div class="legend-item">
-                    <div class="legend-color" style="background: {color};"></div>
-                    <div class="legend-text">
-                        <div class="legend-label">{asset_class}</div>
-                        <div class="legend-value">{fmt_pct(pct)} · {fmt_currency(value)}</div>
-                    </div>
-                </div>
+            bar_width = (pct / max_alloc) * 100
+            allocation_rows += f'''
+                <tr>
+                    <td style="width: 20px;"><div style="width: 14px; height: 14px; background: {color}; border-radius: 3px;"></div></td>
+                    <td style="font-weight: 600;">{asset_class}</td>
+                    <td class="number">{pct:.1f}%</td>
+                    <td class="number">{fmt_currency(value)}</td>
+                    <td style="width: 40%;">
+                        <div style="background: #f0f0f0; height: 12px; border-radius: 2px;">
+                            <div style="background: {color}; height: 12px; width: {bar_width}%; border-radius: 2px;"></div>
+                        </div>
+                    </td>
+                </tr>
             '''
 
-    # Build sector horizontal bars
-    sector_sorted = sorted(sector_exposure.items(), key=lambda x: x[1], reverse=True)[:10]
+    # Build sector table rows
+    sector_sorted = sorted(sector_exposure.items(), key=lambda x: x[1], reverse=True)[:8]
     max_sector = sector_sorted[0][1] if sector_sorted else 100
-    sector_bars = ""
-    for i, (sector, pct) in enumerate(sector_sorted):
+    sector_rows = ""
+    for sector, pct in sector_sorted:
         if pct > 0:
-            width = (pct / max_sector) * 100
-            sector_bars += f'''
-                <div class="hbar-row">
-                    <div class="hbar-label">{sector}</div>
-                    <div class="hbar-container">
-                        <div class="hbar" style="width: {width}%; background: #30d158;"></div>
-                    </div>
-                    <div class="hbar-value">{fmt_pct(pct)}</div>
-                </div>
+            bar_width = (pct / max_sector) * 100
+            sector_rows += f'''
+                <tr>
+                    <td>{sector}</td>
+                    <td style="width: 50%;">
+                        <div style="background: #e8f5e9; height: 14px; border-radius: 2px;">
+                            <div style="background: #30d158; height: 14px; width: {bar_width}%; border-radius: 2px;"></div>
+                        </div>
+                    </td>
+                    <td class="number" style="font-weight: 600;">{pct:.1f}%</td>
+                </tr>
             '''
 
-    # Build geography horizontal bars
-    geo_sorted = sorted(geography.items(), key=lambda x: x[1], reverse=True)[:8]
+    # Build geography table rows
+    geo_sorted = sorted(geography.items(), key=lambda x: x[1], reverse=True)[:6]
     max_geo = geo_sorted[0][1] if geo_sorted else 100
-    geo_bars = ""
-    for i, (region, pct) in enumerate(geo_sorted):
+    geo_rows = ""
+    for region, pct in geo_sorted:
         if pct > 0:
-            width = (pct / max_geo) * 100
-            geo_bars += f'''
-                <div class="hbar-row">
-                    <div class="hbar-label">{region}</div>
-                    <div class="hbar-container">
-                        <div class="hbar" style="width: {width}%; background: #ff9f0a;"></div>
-                    </div>
-                    <div class="hbar-value">{fmt_pct(pct)}</div>
-                </div>
+            bar_width = (pct / max_geo) * 100
+            geo_rows += f'''
+                <tr>
+                    <td>{region}</td>
+                    <td style="width: 50%;">
+                        <div style="background: #fff3e0; height: 14px; border-radius: 2px;">
+                            <div style="background: #ff9f0a; height: 14px; width: {bar_width}%; border-radius: 2px;"></div>
+                        </div>
+                    </td>
+                    <td class="number" style="font-weight: 600;">{pct:.1f}%</td>
+                </tr>
             '''
 
-    # Build positions table rows
+    # Build positions table rows - show ALL positions
     positions_rows = ""
     sorted_positions = sorted(positions, key=lambda x: x.get('value', 0), reverse=True)
-    for i, pos in enumerate(sorted_positions[:25]):
+    for i, pos in enumerate(sorted_positions):
         symbol = pos.get('symbol', 'N/A')
-        description = pos.get('description', '')[:35]
+        description = pos.get('description', '')[:40]
         shares = pos.get('shares', 0)
         price = pos.get('price', 0)
         value = pos.get('value', 0)
         pct = (value / total_value * 100) if total_value else 0
-        row_class = 'alt-row' if i % 2 == 1 else ''
+        bg_color = '#fafafa' if i % 2 == 1 else '#ffffff'
+        bar_width = min(pct * 1.8, 100)
         positions_rows += f'''
-            <tr class="{row_class}">
-                <td class="symbol-cell">
-                    <div class="symbol">{symbol}</div>
-                    <div class="description">{description}</div>
+            <tr style="background: {bg_color};">
+                <td>
+                    <strong style="font-size: 10px;">{symbol}</strong><br/>
+                    <span style="font-size: 8px; color: #666;">{description}</span>
                 </td>
                 <td class="number">{shares:,.4f}</td>
                 <td class="number">{fmt_currency(price)}</td>
                 <td class="number">{fmt_currency(value)}</td>
                 <td class="number">
-                    <div class="weight-cell">
-                        <span>{pct:.2f}%</span>
-                        <div class="mini-bar" style="width: {min(pct * 2, 100)}%;"></div>
+                    {pct:.2f}%
+                    <div style="background: #e8eaf6; height: 4px; margin-top: 3px; border-radius: 2px;">
+                        <div style="background: #635bff; height: 4px; width: {bar_width}%; border-radius: 2px;"></div>
                     </div>
                 </td>
             </tr>
         '''
 
-    # Build insights cards
-    insights_cards = ""
-    insight_icons = {
-        'info': ('info-icon', '#635bff'),
-        'warning': ('warning-icon', '#ff9f0a'),
-        'success': ('success-icon', '#30d158'),
-        'positive': ('success-icon', '#30d158'),
-        'negative': ('warning-icon', '#ff453a'),
+    # Build insights rows (2-column table layout)
+    insight_colors = {
+        'info': '#635bff',
+        'warning': '#ff9f0a',
+        'success': '#30d158',
+        'positive': '#30d158',
+        'negative': '#ff453a',
     }
-    for insight in insights[:8]:
-        insight_type = insight.get('type', 'info')
-        icon_class, border_color = insight_icons.get(insight_type, ('info-icon', '#635bff'))
-        insights_cards += f'''
-            <div class="insight-card" style="border-left-color: {border_color};">
-                <div class="insight-header">{insight.get('title', '')}</div>
-                <div class="insight-body">{insight.get('text', '')}</div>
-            </div>
-        '''
+    insights_rows = ""
+    for i in range(0, len(insights[:8]), 2):
+        insights_rows += "<tr>"
+        for j in range(2):
+            if i + j < len(insights[:8]):
+                insight = insights[i + j]
+                border_color = insight_colors.get(insight.get('type', 'info'), '#635bff')
+                insights_rows += f'''
+                    <td style="width: 50%; vertical-align: top; padding: 8px;">
+                        <div style="background: #fafafa; border-left: 4px solid {border_color}; padding: 12px; border-radius: 0 4px 4px 0;">
+                            <div style="font-weight: 600; font-size: 10px; margin-bottom: 6px;">{insight.get('title', '')}</div>
+                            <div style="font-size: 8px; color: #555; line-height: 1.5;">{insight.get('text', '')}</div>
+                        </div>
+                    </td>
+                '''
+            else:
+                insights_rows += "<td></td>"
+        insights_rows += "</tr>"
 
-    # Risk gauge position calculation
-    def get_risk_level(vol):
+    # Risk level calculation for gauge
+    def get_risk_label(vol):
         if vol is None:
-            return 50
-        if vol < 10:
-            return 15
-        elif vol < 15:
-            return 35
-        elif vol < 20:
-            return 50
-        elif vol < 25:
-            return 65
+            return "Moderate", 50
+        if vol < 8:
+            return "Very Conservative", 10
+        elif vol < 12:
+            return "Conservative", 25
+        elif vol < 16:
+            return "Moderate", 50
+        elif vol < 22:
+            return "Aggressive", 75
         else:
-            return 85
+            return "Very Aggressive", 90
 
-    risk_position = get_risk_level(volatility)
+    risk_label, risk_pct = get_risk_label(volatility)
 
     # Scenario analysis data
     scenarios = [
@@ -3145,13 +3149,13 @@ def generate_report_html(data, report_date):
 
     scenarios_rows = ""
     for scenario in scenarios:
-        mkt_class = 'negative' if scenario['market'] < 0 else 'positive'
-        port_class = 'negative' if scenario['portfolio'] < 0 else 'positive'
+        mkt_color = '#ff453a' if scenario['market'] < 0 else '#30d158'
+        port_color = '#ff453a' if scenario['portfolio'] < 0 else '#30d158'
         scenarios_rows += f'''
             <tr>
                 <td>{scenario['name']}</td>
-                <td class="number {mkt_class}">{scenario['market']:+.1f}%</td>
-                <td class="number {port_class}">{scenario['portfolio']:+.1f}%</td>
+                <td class="number" style="color: {mkt_color};">{scenario['market']:+.1f}%</td>
+                <td class="number" style="color: {port_color};">{scenario['portfolio']:+.1f}%</td>
                 <td class="number">{fmt_currency(total_value * (1 + scenario['portfolio']/100)) if total_value else 'N/A'}</td>
             </tr>
         '''
@@ -3180,21 +3184,11 @@ def generate_report_html(data, report_date):
         <style>
             @page {{
                 size: letter;
-                margin: 0;
+                margin: 0.6in 0.7in;
             }}
 
             @page :first {{
                 margin: 0;
-            }}
-
-            @page content {{
-                margin: 0.6in 0.75in;
-                @top-left {{
-                    content: element(header);
-                }}
-                @bottom-center {{
-                    content: element(footer);
-                }}
             }}
 
             * {{
@@ -3204,94 +3198,81 @@ def generate_report_html(data, report_date):
             }}
 
             body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                font-family: Helvetica, Arial, sans-serif;
                 font-size: 9pt;
-                line-height: 1.5;
+                line-height: 1.4;
                 color: #1a1a2e;
             }}
 
             /* Cover Page */
             .cover-page {{
-                page: none;
-                height: 100vh;
-                display: flex;
-                flex-direction: column;
-                position: relative;
-                background: #fff;
+                page-break-after: always;
+                height: 100%;
             }}
 
-            .cover-brand-bar {{
-                background: linear-gradient(135deg, #635bff 0%, #4f46e5 100%);
-                height: 280px;
-                padding: 40px 50px;
+            .cover-header {{
+                background: #635bff;
+                padding: 50px;
                 color: white;
             }}
 
-            .cover-logo {{
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-bottom: 60px;
+            .cover-logo-row {{
+                margin-bottom: 50px;
             }}
 
             .cover-logo-icon {{
-                width: 48px;
-                height: 48px;
+                display: inline-block;
+                width: 44px;
+                height: 44px;
                 background: rgba(255,255,255,0.2);
-                border-radius: 10px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }}
-
-            .cover-logo-icon svg {{
-                width: 32px;
-                height: 32px;
-            }}
-
-            .cover-brand-name {{
+                border-radius: 8px;
+                vertical-align: middle;
+                margin-right: 12px;
+                text-align: center;
+                line-height: 44px;
                 font-size: 24px;
+            }}
+
+            .cover-brand {{
+                display: inline-block;
+                vertical-align: middle;
+                font-size: 22px;
                 font-weight: 700;
             }}
 
             .cover-title {{
-                font-size: 42px;
+                font-size: 38px;
                 font-weight: 300;
-                letter-spacing: -0.5px;
                 margin-bottom: 8px;
             }}
 
             .cover-subtitle {{
-                font-size: 16px;
+                font-size: 14px;
                 opacity: 0.9;
-                font-weight: 400;
             }}
 
-            .cover-content {{
-                flex: 1;
-                padding: 50px;
-                display: flex;
-                flex-direction: column;
+            .cover-body {{
+                padding: 40px 50px;
             }}
 
-            .cover-summary {{
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 30px;
-                margin-bottom: 40px;
+            .cover-stats {{
+                width: 100%;
+                border-collapse: collapse;
             }}
 
-            .cover-stat {{
-                padding: 20px 0;
+            .cover-stats td {{
+                width: 50%;
+                padding: 25px 0;
                 border-bottom: 1px solid #e5e5e5;
+                vertical-align: top;
             }}
 
             .cover-stat-label {{
-                font-size: 11px;
+                font-size: 10px;
                 color: #666;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
-                margin-bottom: 6px;
+                margin-bottom: 8px;
             }}
 
             .cover-stat-value {{
@@ -3304,327 +3285,127 @@ def generate_report_html(data, report_date):
                 color: #635bff;
             }}
 
-            .cover-meta {{
-                margin-top: auto;
-                padding-top: 30px;
+            .cover-footer {{
+                position: absolute;
+                bottom: 40px;
+                left: 50px;
+                right: 50px;
+                padding-top: 20px;
                 border-top: 1px solid #e5e5e5;
-                display: flex;
-                justify-content: space-between;
+                font-size: 9px;
                 color: #666;
-                font-size: 10px;
             }}
 
-            /* Content Pages */
-            .content-page {{
-                page: content;
-                page-break-before: always;
-                padding: 20px 0;
+            .cover-footer-left {{
+                float: left;
             }}
 
-            .running-header {{
-                position: running(header);
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding-bottom: 10px;
+            .cover-footer-right {{
+                float: right;
+            }}
+
+            /* Page Header */
+            .page-header {{
                 border-bottom: 2px solid #635bff;
+                padding-bottom: 8px;
                 margin-bottom: 20px;
             }}
 
-            .header-logo {{
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }}
-
-            .header-logo-icon {{
-                width: 24px;
-                height: 24px;
+            .page-header-logo {{
+                display: inline-block;
+                width: 20px;
+                height: 20px;
                 background: #635bff;
-                border-radius: 4px;
+                border-radius: 3px;
+                vertical-align: middle;
+                margin-right: 8px;
             }}
 
-            .header-brand {{
-                font-size: 12px;
+            .page-header-brand {{
+                display: inline-block;
+                vertical-align: middle;
+                font-size: 11px;
                 font-weight: 600;
-                color: #1a1a2e;
             }}
 
-            .header-title {{
-                font-size: 10px;
+            .page-header-title {{
+                float: right;
+                font-size: 9px;
                 color: #666;
+                line-height: 20px;
             }}
 
-            .running-footer {{
-                position: running(footer);
+            /* Page Footer */
+            .page-footer {{
+                position: fixed;
+                bottom: 0.4in;
+                left: 0.7in;
+                right: 0.7in;
                 text-align: center;
                 font-size: 8px;
                 color: #999;
-                padding-top: 10px;
+                padding-top: 8px;
                 border-top: 1px solid #e5e5e5;
             }}
 
-            .page-number::after {{
-                content: "Page " counter(page);
+            /* Content Sections */
+            .content-page {{
+                page-break-before: always;
             }}
 
-            /* Section Headers */
             .section-header {{
                 background: #f8f9fc;
-                padding: 12px 16px;
-                margin: 20px 0 16px 0;
+                padding: 10px 14px;
+                margin: 18px 0 14px 0;
                 border-left: 4px solid #635bff;
             }}
 
             .section-header h2 {{
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 700;
                 color: #1a1a2e;
                 text-transform: uppercase;
-                letter-spacing: 0.5px;
+                letter-spacing: 0.3px;
+                margin: 0;
             }}
 
-            /* Cards and Metrics */
-            .metrics-grid {{
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 12px;
-                margin-bottom: 20px;
+            /* Metrics */
+            .metrics-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 16px;
             }}
 
-            .metric-card {{
+            .metrics-table td {{
+                width: 25%;
+                padding: 14px;
                 background: #f8f9fc;
-                border-radius: 8px;
-                padding: 16px;
                 text-align: center;
+                vertical-align: top;
+            }}
+
+            .metrics-table td + td {{
+                border-left: 3px solid white;
             }}
 
             .metric-label {{
                 font-size: 8px;
                 color: #666;
                 text-transform: uppercase;
-                letter-spacing: 0.5px;
+                letter-spacing: 0.3px;
                 margin-bottom: 6px;
             }}
 
             .metric-value {{
-                font-size: 20px;
+                font-size: 18px;
                 font-weight: 700;
                 color: #1a1a2e;
-            }}
-
-            .metric-value.positive {{
-                color: #30d158;
-            }}
-
-            .metric-value.negative {{
-                color: #ff453a;
             }}
 
             .metric-subtext {{
-                font-size: 8px;
-                color: #666;
+                font-size: 7px;
+                color: #888;
                 margin-top: 4px;
-            }}
-
-            /* Two Column Layout */
-            .two-col {{
-                display: flex;
-                gap: 24px;
-            }}
-
-            .two-col > div {{
-                flex: 1;
-            }}
-
-            /* Donut Chart */
-            .chart-container {{
-                display: flex;
-                align-items: center;
-                gap: 24px;
-                margin-bottom: 20px;
-            }}
-
-            .donut-chart {{
-                width: 160px;
-                height: 160px;
-                border-radius: 50%;
-                background: conic-gradient({donut_segments.rstrip(', ')} );
-                position: relative;
-                flex-shrink: 0;
-            }}
-
-            .donut-chart::after {{
-                content: '';
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                width: 90px;
-                height: 90px;
-                background: white;
-                border-radius: 50%;
-            }}
-
-            .donut-center {{
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                text-align: center;
-                z-index: 1;
-            }}
-
-            .donut-value {{
-                font-size: 16px;
-                font-weight: 700;
-                color: #1a1a2e;
-            }}
-
-            .donut-label {{
-                font-size: 8px;
-                color: #666;
-            }}
-
-            .chart-legend {{
-                flex: 1;
-            }}
-
-            .legend-item {{
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 6px 0;
-                border-bottom: 1px solid #f0f0f0;
-            }}
-
-            .legend-color {{
-                width: 12px;
-                height: 12px;
-                border-radius: 3px;
-                flex-shrink: 0;
-            }}
-
-            .legend-text {{
-                flex: 1;
-            }}
-
-            .legend-label {{
-                font-size: 9px;
-                font-weight: 500;
-                color: #1a1a2e;
-            }}
-
-            .legend-value {{
-                font-size: 8px;
-                color: #666;
-            }}
-
-            /* Horizontal Bar Chart */
-            .hbar-chart {{
-                margin-bottom: 20px;
-            }}
-
-            .hbar-row {{
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                margin-bottom: 8px;
-            }}
-
-            .hbar-label {{
-                width: 100px;
-                font-size: 9px;
-                color: #1a1a2e;
-                text-align: right;
-                flex-shrink: 0;
-            }}
-
-            .hbar-container {{
-                flex: 1;
-                height: 16px;
-                background: #f0f0f0;
-                border-radius: 3px;
-                overflow: hidden;
-            }}
-
-            .hbar {{
-                height: 100%;
-                border-radius: 3px;
-                transition: width 0.3s;
-            }}
-
-            .hbar-value {{
-                width: 45px;
-                font-size: 9px;
-                font-weight: 600;
-                color: #1a1a2e;
-                text-align: right;
-            }}
-
-            /* Risk Gauge */
-            .risk-gauge-container {{
-                text-align: center;
-                margin: 20px 0;
-            }}
-
-            .risk-gauge {{
-                width: 200px;
-                height: 100px;
-                margin: 0 auto 10px auto;
-                position: relative;
-                overflow: hidden;
-            }}
-
-            .risk-gauge-bg {{
-                width: 200px;
-                height: 200px;
-                border-radius: 50%;
-                background: conic-gradient(from 180deg, #30d158 0deg, #ffd60a 90deg, #ff9f0a 135deg, #ff453a 180deg);
-                position: absolute;
-                top: 0;
-                left: 0;
-            }}
-
-            .risk-gauge-mask {{
-                width: 140px;
-                height: 140px;
-                background: white;
-                border-radius: 50%;
-                position: absolute;
-                top: 30px;
-                left: 30px;
-            }}
-
-            .risk-gauge-needle {{
-                width: 4px;
-                height: 70px;
-                background: #1a1a2e;
-                position: absolute;
-                bottom: 0;
-                left: 98px;
-                transform-origin: bottom center;
-                transform: rotate({(risk_position - 50) * 1.8}deg);
-                border-radius: 2px;
-            }}
-
-            .risk-gauge-center {{
-                width: 16px;
-                height: 16px;
-                background: #1a1a2e;
-                border-radius: 50%;
-                position: absolute;
-                bottom: -8px;
-                left: 92px;
-            }}
-
-            .risk-labels {{
-                display: flex;
-                justify-content: space-between;
-                width: 200px;
-                margin: 0 auto;
-                font-size: 8px;
-                color: #666;
             }}
 
             /* Tables */
@@ -3634,9 +3415,9 @@ def generate_report_html(data, report_date):
                 font-size: 9px;
             }}
 
-            thead th {{
+            th {{
                 background: #f8f9fc;
-                padding: 10px 8px;
+                padding: 8px;
                 text-align: left;
                 font-weight: 600;
                 color: #666;
@@ -3646,105 +3427,95 @@ def generate_report_html(data, report_date):
                 border-bottom: 2px solid #e5e5e5;
             }}
 
-            tbody td {{
-                padding: 10px 8px;
+            td {{
+                padding: 8px;
                 border-bottom: 1px solid #f0f0f0;
                 vertical-align: middle;
             }}
 
-            tbody tr.alt-row {{
-                background: #fafafa;
-            }}
-
             .number {{
                 text-align: right;
-                font-variant-numeric: tabular-nums;
             }}
 
-            .symbol-cell {{
-                min-width: 120px;
+            /* Two Column */
+            .two-col-table {{
+                width: 100%;
+                border-collapse: collapse;
             }}
 
-            .symbol {{
-                font-weight: 600;
-                color: #1a1a2e;
-                font-size: 10px;
+            .two-col-table > tbody > tr > td {{
+                width: 50%;
+                vertical-align: top;
+                padding: 0;
             }}
 
-            .description {{
+            .two-col-table > tbody > tr > td:first-child {{
+                padding-right: 12px;
+            }}
+
+            .two-col-table > tbody > tr > td:last-child {{
+                padding-left: 12px;
+            }}
+
+            /* Risk Gauge - Simple bar version */
+            .risk-gauge-simple {{
+                margin: 20px 0;
+                text-align: center;
+            }}
+
+            .risk-bar-container {{
+                width: 100%;
+                height: 24px;
+                background: linear-gradient(to right, #30d158 0%, #ffd60a 40%, #ff9f0a 70%, #ff453a 100%);
+                border-radius: 12px;
+                position: relative;
+                margin-bottom: 8px;
+            }}
+
+            .risk-indicator {{
+                position: absolute;
+                top: -4px;
+                width: 8px;
+                height: 32px;
+                background: #1a1a2e;
+                border-radius: 4px;
+                border: 2px solid white;
+            }}
+
+            .risk-labels-row {{
+                width: 100%;
+            }}
+
+            .risk-labels-row td {{
                 font-size: 8px;
                 color: #666;
-                margin-top: 2px;
-            }}
-
-            .weight-cell {{
-                display: flex;
-                flex-direction: column;
-                align-items: flex-end;
-                gap: 3px;
-            }}
-
-            .mini-bar {{
-                height: 4px;
-                background: #635bff;
-                border-radius: 2px;
-                max-width: 60px;
-            }}
-
-            .positive {{
-                color: #30d158;
-            }}
-
-            .negative {{
-                color: #ff453a;
-            }}
-
-            /* Insights */
-            .insights-grid {{
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 12px;
-            }}
-
-            .insight-card {{
-                background: #fafafa;
-                border-left: 4px solid #635bff;
-                border-radius: 0 6px 6px 0;
-                padding: 12px 14px;
-            }}
-
-            .insight-header {{
-                font-size: 10px;
-                font-weight: 600;
-                color: #1a1a2e;
-                margin-bottom: 6px;
-            }}
-
-            .insight-body {{
-                font-size: 8px;
-                color: #555;
-                line-height: 1.5;
+                border: none;
+                padding: 4px 0;
             }}
 
             /* Glossary */
-            .glossary-grid {{
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 16px;
+            .glossary-table {{
+                width: 100%;
+            }}
+
+            .glossary-table td {{
+                width: 50%;
+                vertical-align: top;
+                padding: 0 10px 0 0;
             }}
 
             .glossary-term {{
-                margin-bottom: 12px;
+                margin-bottom: 14px;
             }}
 
-            .glossary-term dt {{
+            .glossary-term-title {{
                 font-weight: 600;
                 font-size: 9px;
                 color: #1a1a2e;
                 margin-bottom: 3px;
             }}
 
-            .glossary-term dd {{
+            .glossary-term-def {{
                 font-size: 8px;
                 color: #666;
                 line-height: 1.5;
@@ -3753,15 +3524,13 @@ def generate_report_html(data, report_date):
             /* Disclosures */
             .disclosures {{
                 background: #f8f9fc;
-                padding: 20px;
-                border-radius: 6px;
+                padding: 16px;
                 margin-top: 20px;
             }}
 
             .disclosures h3 {{
                 font-size: 10px;
                 font-weight: 600;
-                color: #1a1a2e;
                 margin-bottom: 10px;
             }}
 
@@ -3771,196 +3540,215 @@ def generate_report_html(data, report_date):
                 line-height: 1.6;
                 margin-bottom: 8px;
             }}
-
-            /* Page Breaks */
-            .page-break {{
-                page-break-before: always;
-            }}
-
-            .avoid-break {{
-                page-break-inside: avoid;
-            }}
         </style>
     </head>
     <body>
         <!-- Cover Page -->
         <div class="cover-page">
-            <div class="cover-brand-bar">
-                <div class="cover-logo">
-                    <div class="cover-logo-icon">
-                        <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <rect x="0" y="0" width="24" height="24" rx="4" fill="white"/>
-                            <rect x="20" y="20" width="24" height="24" rx="4" fill="white"/>
-                            <rect x="0" y="19" width="44" height="6" fill="white" opacity="0.4"/>
-                            <rect x="16" y="16" width="12" height="12" rx="2" fill="white"/>
-                        </svg>
-                    </div>
-                    <div class="cover-brand-name">Statement Scan</div>
+            <div class="cover-header">
+                <div class="cover-logo-row">
+                    <span class="cover-logo-icon">&#9632;</span>
+                    <span class="cover-brand">Statement Scan</span>
                 </div>
                 <div class="cover-title">Portfolio Analysis Report</div>
                 <div class="cover-subtitle">Comprehensive investment analysis and insights</div>
             </div>
 
-            <div class="cover-content">
-                <div class="cover-summary">
-                    <div class="cover-stat">
-                        <div class="cover-stat-label">Total Portfolio Value</div>
-                        <div class="cover-stat-value primary">{fmt_currency(total_value)}</div>
-                    </div>
-                    <div class="cover-stat">
-                        <div class="cover-stat-label">Number of Holdings</div>
-                        <div class="cover-stat-value">{len(positions)}</div>
-                    </div>
-                    <div class="cover-stat">
-                        <div class="cover-stat-label">Portfolio Volatility</div>
-                        <div class="cover-stat-value">{fmt_pct(volatility) if volatility else 'N/A'}</div>
-                    </div>
-                    <div class="cover-stat">
-                        <div class="cover-stat-label">Risk-Adjusted Return (Sharpe)</div>
-                        <div class="cover-stat-value">{f'{sharpe:.2f}' if sharpe else 'N/A'}</div>
-                    </div>
-                </div>
+            <div class="cover-body">
+                <table class="cover-stats">
+                    <tr>
+                        <td>
+                            <div class="cover-stat-label">Total Portfolio Value</div>
+                            <div class="cover-stat-value primary">{fmt_currency(total_value)}</div>
+                        </td>
+                        <td>
+                            <div class="cover-stat-label">Number of Holdings</div>
+                            <div class="cover-stat-value">{len(positions)}</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <div class="cover-stat-label">Portfolio Volatility</div>
+                            <div class="cover-stat-value">{fmt_pct(volatility) if volatility else 'N/A'}</div>
+                        </td>
+                        <td>
+                            <div class="cover-stat-label">Risk-Adjusted Return (Sharpe)</div>
+                            <div class="cover-stat-value">{f'{sharpe:.2f}' if sharpe else 'N/A'}</div>
+                        </td>
+                    </tr>
+                </table>
 
-                <div class="cover-meta">
-                    <div>Report Generated: {report_date}</div>
-                    <div>Statement Scan Portfolio Intelligence</div>
+                <div class="cover-footer">
+                    <span class="cover-footer-left">Report Generated: {report_date}</span>
+                    <span class="cover-footer-right">Statement Scan Portfolio Intelligence</span>
                 </div>
             </div>
         </div>
 
-        <!-- Running Header/Footer (for content pages) -->
-        <div class="running-header">
-            <div class="header-logo">
-                <div class="header-logo-icon"></div>
-                <span class="header-brand">Statement Scan</span>
-            </div>
-            <div class="header-title">Portfolio Analysis Report</div>
-        </div>
-
-        <div class="running-footer">
-            <span class="page-number"></span> | Generated {report_date} | This report is for informational purposes only
-        </div>
-
-        <!-- Overview Section -->
+        <!-- Page 2: Executive Overview -->
         <div class="content-page">
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
+            </div>
+
             <div class="section-header">
                 <h2>Executive Overview</h2>
             </div>
 
-            <div class="metrics-grid">
-                <div class="metric-card">
-                    <div class="metric-label">Total Value</div>
-                    <div class="metric-value">{fmt_currency(total_value)}</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Holdings</div>
-                    <div class="metric-value">{len(positions)}</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Top 10 Concentration</div>
-                    <div class="metric-value">{fmt_pct(concentration.get('top_10_weight'))}</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Largest Position</div>
-                    <div class="metric-value">{fmt_pct(concentration.get('largest_weight'))}</div>
-                </div>
-            </div>
+            <table class="metrics-table">
+                <tr>
+                    <td>
+                        <div class="metric-label">Total Value</div>
+                        <div class="metric-value">{fmt_currency(total_value)}</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">Holdings</div>
+                        <div class="metric-value">{len(positions)}</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">Top 10 Concentration</div>
+                        <div class="metric-value">{fmt_pct(concentration.get('top_10_weight'))}</div>
+                    </td>
+                    <td>
+                        <div class="metric-label">Largest Position</div>
+                        <div class="metric-value">{fmt_pct(concentration.get('largest_weight'))}</div>
+                    </td>
+                </tr>
+            </table>
 
             <div class="section-header">
                 <h2>Asset Allocation</h2>
             </div>
 
-            <div class="chart-container">
-                <div class="donut-chart">
-                    <div class="donut-center">
-                        <div class="donut-value">{len(asset_allocation)}</div>
-                        <div class="donut-label">Asset Classes</div>
-                    </div>
-                </div>
-                <div class="chart-legend">
-                    {allocation_legend}
-                </div>
-            </div>
+            <table style="margin-bottom: 20px;">
+                <thead>
+                    <tr>
+                        <th style="width: 20px;"></th>
+                        <th>Asset Class</th>
+                        <th class="number">Weight</th>
+                        <th class="number">Value</th>
+                        <th>Distribution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {allocation_rows}
+                </tbody>
+            </table>
 
-            <div class="two-col">
-                <div>
-                    <div class="section-header" style="margin-top: 10px;">
-                        <h2>Sector Exposure</h2>
-                    </div>
-                    <div class="hbar-chart">
-                        {sector_bars}
-                    </div>
-                </div>
-                <div>
-                    <div class="section-header" style="margin-top: 10px;">
-                        <h2>Geographic Distribution</h2>
-                    </div>
-                    <div class="hbar-chart">
-                        {geo_bars}
-                    </div>
-                </div>
+            <table class="two-col-table">
+                <tr>
+                    <td>
+                        <div class="section-header" style="margin-top: 0;">
+                            <h2>Sector Exposure</h2>
+                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Sector</th>
+                                    <th>Distribution</th>
+                                    <th class="number">Weight</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sector_rows}
+                            </tbody>
+                        </table>
+                    </td>
+                    <td>
+                        <div class="section-header" style="margin-top: 0;">
+                            <h2>Geographic Distribution</h2>
+                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Region</th>
+                                    <th>Distribution</th>
+                                    <th class="number">Weight</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {geo_rows}
+                            </tbody>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+            <div class="page-footer">
+                Page 2 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
 
-        <!-- Risk Analysis Section -->
+        <!-- Page 3: Risk Analysis -->
         <div class="content-page">
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
+            </div>
+
             <div class="section-header">
                 <h2>Risk Analysis</h2>
             </div>
 
-            <div class="two-col">
-                <div>
-                    <div class="metrics-grid" style="grid-template-columns: repeat(2, 1fr);">
-                        <div class="metric-card">
-                            <div class="metric-label">Annualized Volatility</div>
-                            <div class="metric-value">{fmt_pct(volatility) if volatility else 'N/A'}</div>
-                            <div class="metric-subtext">Standard deviation of returns</div>
+            <table class="two-col-table" style="margin-bottom: 20px;">
+                <tr>
+                    <td>
+                        <table class="metrics-table" style="margin-bottom: 0;">
+                            <tr>
+                                <td>
+                                    <div class="metric-label">Annualized Volatility</div>
+                                    <div class="metric-value">{fmt_pct(volatility) if volatility else 'N/A'}</div>
+                                    <div class="metric-subtext">Standard deviation of returns</div>
+                                </td>
+                                <td>
+                                    <div class="metric-label">Beta vs S&P 500</div>
+                                    <div class="metric-value">{f'{beta:.2f}' if beta else 'N/A'}</div>
+                                    <div class="metric-subtext">Market sensitivity</div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <div class="metric-label">Sharpe Ratio</div>
+                                    <div class="metric-value">{f'{sharpe:.2f}' if sharpe else 'N/A'}</div>
+                                    <div class="metric-subtext">Risk-adjusted return</div>
+                                </td>
+                                <td>
+                                    <div class="metric-label">Max Drawdown</div>
+                                    <div class="metric-value" style="color: {'#ff453a' if max_dd and max_dd < -10 else '#1a1a2e'};">{fmt_pct(max_dd) if max_dd else 'N/A'}</div>
+                                    <div class="metric-subtext">Largest peak-to-trough decline</div>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                    <td style="text-align: center; padding: 20px;">
+                        <div style="font-size: 10px; color: #666; margin-bottom: 12px;">Risk Profile</div>
+                        <div style="background: linear-gradient(to right, #30d158, #ffd60a, #ff9f0a, #ff453a); height: 20px; border-radius: 10px; position: relative; margin-bottom: 8px;">
+                            <div style="position: absolute; left: {risk_pct}%; top: -3px; width: 6px; height: 26px; background: #1a1a2e; border-radius: 3px; border: 2px solid white; margin-left: -3px;"></div>
                         </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Beta vs S&P 500</div>
-                            <div class="metric-value">{f'{beta:.2f}' if beta else 'N/A'}</div>
-                            <div class="metric-subtext">Market sensitivity</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Sharpe Ratio</div>
-                            <div class="metric-value">{f'{sharpe:.2f}' if sharpe else 'N/A'}</div>
-                            <div class="metric-subtext">Risk-adjusted return</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-label">Max Drawdown</div>
-                            <div class="metric-value {'negative' if max_dd and max_dd < -10 else ''}">{fmt_pct(max_dd) if max_dd else 'N/A'}</div>
-                            <div class="metric-subtext">Largest peak-to-trough decline</div>
-                        </div>
-                    </div>
-                </div>
-                <div>
-                    <div class="risk-gauge-container">
-                        <h4 style="font-size: 10px; margin-bottom: 10px; color: #666;">Risk Profile</h4>
-                        <div class="risk-gauge">
-                            <div class="risk-gauge-bg"></div>
-                            <div class="risk-gauge-mask"></div>
-                            <div class="risk-gauge-needle"></div>
-                            <div class="risk-gauge-center"></div>
-                        </div>
-                        <div class="risk-labels">
-                            <span>Conservative</span>
-                            <span>Moderate</span>
-                            <span>Aggressive</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+                        <table class="risk-labels-row" style="width: 100%;">
+                            <tr>
+                                <td style="text-align: left;">Conservative</td>
+                                <td style="text-align: center;">Moderate</td>
+                                <td style="text-align: right;">Aggressive</td>
+                            </tr>
+                        </table>
+                        <div style="font-size: 12px; font-weight: 600; margin-top: 10px; color: #635bff;">{risk_label}</div>
+                    </td>
+                </tr>
+            </table>
 
             <div class="section-header">
                 <h2>Scenario Analysis</h2>
             </div>
 
             <p style="font-size: 8px; color: #666; margin-bottom: 12px;">
-                Hypothetical portfolio performance under historical and projected market scenarios.
-                Estimates based on portfolio beta and historical correlations.
+                Hypothetical portfolio performance under historical and projected market scenarios. Estimates based on portfolio beta and historical correlations.
             </p>
 
-            <table class="avoid-break">
+            <table>
                 <thead>
                     <tr>
                         <th style="width: 40%;">Scenario</th>
@@ -3975,7 +3763,7 @@ def generate_report_html(data, report_date):
             </table>
 
             {f'''
-            <div class="section-header" style="margin-top: 24px;">
+            <div class="section-header" style="margin-top: 20px;">
                 <h2>Projected Growth (Monte Carlo)</h2>
             </div>
 
@@ -3983,7 +3771,7 @@ def generate_report_html(data, report_date):
                 Simulated portfolio values based on 1,000 random scenarios using historical return patterns.
             </p>
 
-            <table class="avoid-break">
+            <table>
                 <thead>
                     <tr>
                         <th>Time Horizon</th>
@@ -3997,83 +3785,115 @@ def generate_report_html(data, report_date):
                 </tbody>
             </table>
             ''' if mc_rows else ''}
+
+            <div class="page-footer">
+                Page 3 | Generated {report_date} | This report is for informational purposes only
+            </div>
         </div>
 
-        <!-- Insights Section -->
+        <!-- Page 4: Key Insights -->
         {f'''
         <div class="content-page">
-            <div class="section-header">
-                <h2>Key Insights & Recommendations</h2>
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
             </div>
 
-            <div class="insights-grid">
-                {insights_cards}
+            <div class="section-header">
+                <h2>Key Insights &amp; Recommendations</h2>
+            </div>
+
+            <table style="width: 100%;">
+                {insights_rows}
+            </table>
+
+            <div class="page-footer">
+                Page 4 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
-        ''' if insights_cards else ''}
+        ''' if insights_rows else ''}
 
-        <!-- Holdings Detail Section -->
+        <!-- Page 5+: Holdings Detail -->
         <div class="content-page">
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
+            </div>
+
             <div class="section-header">
                 <h2>Holdings Detail</h2>
             </div>
 
             <p style="font-size: 8px; color: #666; margin-bottom: 12px;">
-                Top 25 positions by market value. Showing {min(25, len(positions))} of {len(positions)} total holdings.
+                All positions by market value. Showing {len(positions)} holdings.
             </p>
 
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 30%;">Security</th>
+                        <th style="width: 32%;">Security</th>
                         <th class="number">Shares</th>
                         <th class="number">Price</th>
                         <th class="number">Market Value</th>
-                        <th class="number" style="width: 15%;">Weight</th>
+                        <th class="number" style="width: 14%;">Weight</th>
                     </tr>
                 </thead>
                 <tbody>
                     {positions_rows}
                 </tbody>
             </table>
+
+            <div class="page-footer">
+                Page 5 | Generated {report_date} | This report is for informational purposes only
+            </div>
         </div>
 
-        <!-- Glossary & Disclosures -->
+        <!-- Final Page: Glossary & Disclosures -->
         <div class="content-page">
+            <div class="page-header">
+                <span class="page-header-logo"></span>
+                <span class="page-header-brand">Statement Scan</span>
+                <span class="page-header-title">Portfolio Analysis Report</span>
+            </div>
+
             <div class="section-header">
                 <h2>Glossary of Terms</h2>
             </div>
 
-            <div class="glossary-grid">
-                <div>
-                    <dl class="glossary-term">
-                        <dt>Volatility</dt>
-                        <dd>A statistical measure of the dispersion of returns, commonly measured as the annualized standard deviation of returns. Higher volatility indicates greater price fluctuation.</dd>
-                    </dl>
-                    <dl class="glossary-term">
-                        <dt>Beta</dt>
-                        <dd>A measure of systematic risk relative to the market (S&P 500). A beta of 1.0 indicates market-like volatility; greater than 1.0 means more volatile than the market.</dd>
-                    </dl>
-                    <dl class="glossary-term">
-                        <dt>Sharpe Ratio</dt>
-                        <dd>Risk-adjusted return metric calculated as (Portfolio Return - Risk-Free Rate) / Portfolio Volatility. Higher values indicate better risk-adjusted performance.</dd>
-                    </dl>
-                </div>
-                <div>
-                    <dl class="glossary-term">
-                        <dt>Maximum Drawdown</dt>
-                        <dd>The largest peak-to-trough decline in portfolio value over a specific period. Measures the worst-case loss scenario from a portfolio's highest point.</dd>
-                    </dl>
-                    <dl class="glossary-term">
-                        <dt>Asset Allocation</dt>
-                        <dd>The distribution of investments across major asset classes such as stocks, bonds, cash, and alternatives. A key driver of long-term portfolio risk and return.</dd>
-                    </dl>
-                    <dl class="glossary-term">
-                        <dt>Concentration Risk</dt>
-                        <dd>The risk of loss arising from having a large portion of the portfolio invested in a single security or small group of securities.</dd>
-                    </dl>
-                </div>
-            </div>
+            <table class="glossary-table">
+                <tr>
+                    <td>
+                        <div class="glossary-term">
+                            <div class="glossary-term-title">Volatility</div>
+                            <div class="glossary-term-def">A statistical measure of the dispersion of returns, commonly measured as the annualized standard deviation of returns. Higher volatility indicates greater price fluctuation.</div>
+                        </div>
+                        <div class="glossary-term">
+                            <div class="glossary-term-title">Beta</div>
+                            <div class="glossary-term-def">A measure of systematic risk relative to the market (S&P 500). A beta of 1.0 indicates market-like volatility; greater than 1.0 means more volatile than the market.</div>
+                        </div>
+                        <div class="glossary-term">
+                            <div class="glossary-term-title">Sharpe Ratio</div>
+                            <div class="glossary-term-def">Risk-adjusted return metric calculated as (Portfolio Return - Risk-Free Rate) / Portfolio Volatility. Higher values indicate better risk-adjusted performance.</div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="glossary-term">
+                            <div class="glossary-term-title">Maximum Drawdown</div>
+                            <div class="glossary-term-def">The largest peak-to-trough decline in portfolio value over a specific period. Measures the worst-case loss scenario from a portfolio's highest point.</div>
+                        </div>
+                        <div class="glossary-term">
+                            <div class="glossary-term-title">Asset Allocation</div>
+                            <div class="glossary-term-def">The distribution of investments across major asset classes such as stocks, bonds, cash, and alternatives. A key driver of long-term portfolio risk and return.</div>
+                        </div>
+                        <div class="glossary-term">
+                            <div class="glossary-term-title">Concentration Risk</div>
+                            <div class="glossary-term-def">The risk of loss arising from having a large portion of the portfolio invested in a single security or small group of securities.</div>
+                        </div>
+                    </td>
+                </tr>
+            </table>
 
             <div class="disclosures">
                 <h3>Important Disclosures</h3>
@@ -4081,6 +3901,10 @@ def generate_report_html(data, report_date):
                 <p>Past performance is not indicative of future results. The projections and scenario analyses presented are hypothetical and based on historical data and statistical models. Actual results may differ materially from those projected.</p>
                 <p>Risk metrics are calculated using historical data and standard financial models. These metrics have limitations and may not fully capture all aspects of portfolio risk. Investors should consider their individual circumstances, risk tolerance, and investment objectives before making investment decisions.</p>
                 <p>Statement Scan does not guarantee the accuracy, completeness, or timeliness of the information provided. Users should verify all information independently and consult with a qualified financial advisor before making investment decisions.</p>
+            </div>
+
+            <div class="page-footer">
+                Page 6 | Generated {report_date} | This report is for informational purposes only
             </div>
         </div>
     </body>
