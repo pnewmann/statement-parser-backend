@@ -20,6 +20,10 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Password reset fields
+    reset_token = db.Column(db.String(100), unique=True, nullable=True, index=True)
+    reset_token_expires = db.Column(db.DateTime, nullable=True)
+
     # Relationships
     portfolios = db.relationship('Portfolio', backref='user', lazy=True, cascade='all, delete-orphan')
     plaid_connections = db.relationship('PlaidConnection', backref='user', lazy=True, cascade='all, delete-orphan')

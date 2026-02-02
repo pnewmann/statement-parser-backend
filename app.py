@@ -9,6 +9,10 @@ import io
 import csv
 import re
 import os
+import secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify
@@ -1159,6 +1163,153 @@ def get_current_user():
 
     except Exception as e:
         return jsonify({'error': f'Failed to get user: {str(e)}'}), 500
+
+
+@app.route('/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    """Request a password reset email."""
+    try:
+        data = request.get_json()
+
+        if not data or 'email' not in data:
+            return jsonify({'error': 'Email is required'}), 400
+
+        email = data['email'].strip().lower()
+
+        # Find user by email
+        user = User.query.filter_by(email=email).first()
+
+        # Always return success to prevent email enumeration
+        if not user:
+            return jsonify({'message': 'If an account exists with that email, a reset link has been sent.'})
+
+        # Generate reset token
+        reset_token = secrets.token_urlsafe(32)
+        user.reset_token = reset_token
+        user.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+        db.session.commit()
+
+        # Send reset email
+        frontend_url = os.environ.get('FRONTEND_URL', 'https://statement-scan.onrender.com')
+        reset_link = f"{frontend_url}?reset_token={reset_token}"
+
+        # Check if email is configured
+        smtp_host = os.environ.get('SMTP_HOST')
+        smtp_user = os.environ.get('SMTP_USER')
+        smtp_pass = os.environ.get('SMTP_PASS')
+
+        if smtp_host and smtp_user and smtp_pass:
+            try:
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = 'Reset Your Statement Scan Password'
+                msg['From'] = smtp_user
+                msg['To'] = email
+
+                text_content = f"""
+Hi,
+
+You requested to reset your password for Statement Scan.
+
+Click this link to reset your password (valid for 1 hour):
+{reset_link}
+
+If you didn't request this, you can safely ignore this email.
+
+- Statement Scan Team
+"""
+
+                html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #0a2540; }}
+        .container {{ max-width: 500px; margin: 0 auto; padding: 40px 20px; }}
+        .logo {{ font-size: 24px; font-weight: 700; color: #635bff; margin-bottom: 32px; }}
+        .btn {{ display: inline-block; background: #635bff; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 24px 0; }}
+        .footer {{ margin-top: 40px; font-size: 14px; color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">Statement Scan</div>
+        <p>Hi,</p>
+        <p>You requested to reset your password. Click the button below to create a new password:</p>
+        <a href="{reset_link}" class="btn">Reset Password</a>
+        <p>This link will expire in 1 hour.</p>
+        <p>If you didn't request this password reset, you can safely ignore this email.</p>
+        <div class="footer">
+            <p>- The Statement Scan Team</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+                msg.attach(MIMEText(text_content, 'plain'))
+                msg.attach(MIMEText(html_content, 'html'))
+
+                smtp_port = int(os.environ.get('SMTP_PORT', 587))
+                with smtplib.SMTP(smtp_host, smtp_port) as server:
+                    server.starttls()
+                    server.login(smtp_user, smtp_pass)
+                    server.sendmail(smtp_user, email, msg.as_string())
+
+            except Exception as email_error:
+                # Log error but don't expose to user
+                print(f"Email error: {email_error}")
+                # Still return success to prevent enumeration
+        else:
+            # Email not configured - log the reset link for development
+            print(f"Password reset link for {email}: {reset_link}")
+
+        return jsonify({'message': 'If an account exists with that email, a reset link has been sent.'})
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to process request: {str(e)}'}), 500
+
+
+@app.route('/auth/reset-password', methods=['POST'])
+def reset_password():
+    """Reset password using a valid reset token."""
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        token = data.get('token', '').strip()
+        new_password = data.get('password', '')
+
+        if not token:
+            return jsonify({'error': 'Reset token is required'}), 400
+
+        if not new_password or len(new_password) < 6:
+            return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+        # Find user by reset token
+        user = User.query.filter_by(reset_token=token).first()
+
+        if not user:
+            return jsonify({'error': 'Invalid or expired reset link'}), 400
+
+        # Check if token is expired
+        if user.reset_token_expires and user.reset_token_expires < datetime.utcnow():
+            user.reset_token = None
+            user.reset_token_expires = None
+            db.session.commit()
+            return jsonify({'error': 'Reset link has expired. Please request a new one.'}), 400
+
+        # Update password
+        user.password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        user.reset_token = None
+        user.reset_token_expires = None
+        db.session.commit()
+
+        return jsonify({'message': 'Password has been reset successfully. You can now log in.'})
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to reset password: {str(e)}'}), 500
 
 
 # =============================================================================
