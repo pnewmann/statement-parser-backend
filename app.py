@@ -3019,6 +3019,68 @@ def generate_report_html(data, report_date):
     # Colors for charts
     colors = ['#635bff', '#30d158', '#ff9f0a', '#ff453a', '#5e5ce6', '#64d2ff', '#bf5af2', '#ff375f']
 
+    # Build stacked bar chart for asset allocation (visual pie chart alternative)
+    allocation_sorted = sorted(asset_allocation.items(), key=lambda x: x[1], reverse=True)
+    allocation_bar_segments = ""
+    for i, (asset_class, pct) in enumerate(allocation_sorted):
+        if pct > 0:
+            color = colors[i % len(colors)]
+            allocation_bar_segments += f'<td style="width: {pct}%; background: {color}; padding: 0; border: none;"></td>'
+
+    # Build allocation legend
+    allocation_legend_items = ""
+    for i, (asset_class, pct) in enumerate(allocation_sorted):
+        if pct > 0:
+            color = colors[i % len(colors)]
+            value = total_value * pct / 100 if total_value else 0
+            allocation_legend_items += f'''
+                <tr>
+                    <td style="width: 16px; padding: 4px;"><div style="width: 12px; height: 12px; background: {color}; border-radius: 2px;"></div></td>
+                    <td style="padding: 4px; font-weight: 500;">{asset_class}</td>
+                    <td style="padding: 4px; text-align: right; font-weight: 600;">{pct:.1f}%</td>
+                    <td style="padding: 4px; text-align: right; color: #666;">{fmt_currency(value)}</td>
+                </tr>
+            '''
+
+    # Build stacked bar for sector exposure
+    sector_sorted = sorted(sector_exposure.items(), key=lambda x: x[1], reverse=True)[:8]
+    sector_bar_segments = ""
+    sector_legend_items = ""
+    sector_total = sum(pct for _, pct in sector_sorted if pct > 0)
+    for i, (sector, pct) in enumerate(sector_sorted):
+        if pct > 0:
+            color = colors[i % len(colors)]
+            # Normalize to 100% for visual bar
+            bar_pct = (pct / sector_total * 100) if sector_total else 0
+            sector_bar_segments += f'<td style="width: {bar_pct}%; background: {color}; padding: 0; border: none;"></td>'
+            sector_legend_items += f'''
+                <tr>
+                    <td style="width: 12px; padding: 3px;"><div style="width: 8px; height: 8px; background: {color}; border-radius: 1px;"></div></td>
+                    <td style="padding: 3px; font-size: 8px;">{sector}</td>
+                    <td style="padding: 3px; text-align: right; font-size: 8px; font-weight: 600;">{pct:.1f}%</td>
+                </tr>
+            '''
+
+    # Build stacked bar for geography
+    geo_sorted = sorted(geography.items(), key=lambda x: x[1], reverse=True)[:6]
+    geo_bar_segments = ""
+    geo_legend_items = ""
+    geo_colors = ['#ff9f0a', '#ffcc02', '#ff6b35', '#e85d04', '#dc2f02', '#9d0208']
+    geo_total = sum(pct for _, pct in geo_sorted if pct > 0)
+    for i, (region, pct) in enumerate(geo_sorted):
+        if pct > 0:
+            color = geo_colors[i % len(geo_colors)]
+            # Normalize to 100% for visual bar
+            bar_pct = (pct / geo_total * 100) if geo_total else 0
+            geo_bar_segments += f'<td style="width: {bar_pct}%; background: {color}; padding: 0; border: none;"></td>'
+            geo_legend_items += f'''
+                <tr>
+                    <td style="width: 12px; padding: 3px;"><div style="width: 8px; height: 8px; background: {color}; border-radius: 1px;"></div></td>
+                    <td style="padding: 3px; font-size: 8px;">{region}</td>
+                    <td style="padding: 3px; text-align: right; font-size: 8px; font-weight: 600;">{pct:.1f}%</td>
+                </tr>
+            '''
+
     # Build historical performance rows
     perf_periods = ['1M', '3M', '6M', 'YTD', '1Y', '3Y', '5Y']
     perf_rows = ""
@@ -3028,10 +3090,10 @@ def generate_report_html(data, report_date):
         port_color = '#30d158' if port_val and port_val >= 0 else '#ff453a'
         bench_color = '#30d158' if bench_val and bench_val >= 0 else '#ff453a'
         perf_rows += f'''
-            <td style="text-align: center; padding: 10px; background: #f8f9fc;">
-                <div style="font-size: 8px; color: #666; margin-bottom: 4px;">{period}</div>
-                <div style="font-size: 14px; font-weight: 700; color: {port_color};">{fmt_pct_change(port_val) if port_val is not None else 'N/A'}</div>
-                <div style="font-size: 8px; color: {bench_color};">S&P: {fmt_pct_change(bench_val) if bench_val is not None else 'N/A'}</div>
+            <td style="text-align: center; padding: 8px; background: #f8f9fc; border-right: 2px solid white;">
+                <div style="font-size: 9px; color: #666; margin-bottom: 4px; font-weight: 600;">{period}</div>
+                <div style="font-size: 16px; font-weight: 700; color: {port_color};">{fmt_pct_change(port_val) if port_val is not None else 'N/A'}</div>
+                <div style="font-size: 8px; color: {bench_color}; margin-top: 2px;">S&P: {fmt_pct_change(bench_val) if bench_val is not None else 'N/A'}</div>
             </td>
         '''
 
@@ -3047,11 +3109,11 @@ def generate_report_html(data, report_date):
                 bar_width = (pct / max_sub) * 100
                 sub_asset_rows += f'''
                     <tr>
-                        <td style="width: 20px;"><div style="width: 10px; height: 10px; background: {color}; border-radius: 2px;"></div></td>
+                        <td style="width: 16px;"><div style="width: 10px; height: 10px; background: {color}; border-radius: 2px;"></div></td>
                         <td style="font-size: 8px;">{sub_class}</td>
-                        <td class="number" style="font-size: 8px;">{pct:.1f}%</td>
-                        <td class="number" style="font-size: 8px;">{fmt_currency(value)}</td>
-                        <td style="width: 35%;">
+                        <td class="num" style="font-size: 8px;">{pct:.1f}%</td>
+                        <td class="num" style="font-size: 8px;">{fmt_currency(value)}</td>
+                        <td style="width: 30%;">
                             <div style="background: #f0f0f0; height: 8px; border-radius: 2px;">
                                 <div style="background: {color}; height: 8px; width: {bar_width}%; border-radius: 2px;"></div>
                             </div>
@@ -3064,16 +3126,17 @@ def generate_report_html(data, report_date):
     sorted_positions = sorted(positions, key=lambda x: x.get('value', 0), reverse=True)
     for i, pos in enumerate(sorted_positions[:10]):
         symbol = pos.get('symbol', 'N/A')
+        description = pos.get('description', '')[:25]
         value = pos.get('value', 0)
         pct = (value / total_value * 100) if total_value else 0
         bar_width = min(pct * 2, 100)
         top10_rows += f'''
             <tr>
-                <td style="text-align: center; font-weight: 600; color: #635bff;">{i + 1}</td>
-                <td style="font-weight: 600;">{symbol}</td>
-                <td class="number">{fmt_currency(value)}</td>
-                <td class="number">{pct:.2f}%</td>
-                <td style="width: 30%;">
+                <td style="text-align: center; font-weight: 700; color: #635bff; width: 30px;">{i + 1}</td>
+                <td><strong>{symbol}</strong><br/><span style="font-size: 7px; color: #888;">{description}</span></td>
+                <td class="num">{fmt_currency(value)}</td>
+                <td class="num">{pct:.2f}%</td>
+                <td style="width: 25%;">
                     <div style="background: #e8eaf6; height: 10px; border-radius: 2px;">
                         <div style="background: #635bff; height: 10px; width: {bar_width}%; border-radius: 2px;"></div>
                     </div>
@@ -3106,24 +3169,23 @@ def generate_report_html(data, report_date):
         sector_compare_rows += f'''
             <tr>
                 <td style="font-size: 8px;">{sector}</td>
-                <td style="width: 25%;">
+                <td style="width: 22%;">
                     <div style="background: #e8eaf6; height: 12px; border-radius: 2px;">
                         <div style="background: #635bff; height: 12px; width: {port_width}%; border-radius: 2px;"></div>
                     </div>
                 </td>
-                <td class="number" style="font-size: 8px;">{port_pct:.1f}%</td>
-                <td style="width: 25%;">
+                <td class="num" style="font-size: 8px;">{port_pct:.1f}%</td>
+                <td style="width: 22%;">
                     <div style="background: #fff3e0; height: 12px; border-radius: 2px;">
                         <div style="background: #ff9f0a; height: 12px; width: {bench_width}%; border-radius: 2px;"></div>
                     </div>
                 </td>
-                <td class="number" style="font-size: 8px;">{bench_pct:.1f}%</td>
-                <td class="number" style="font-size: 8px; color: {diff_color};">{diff:+.1f}%</td>
+                <td class="num" style="font-size: 8px;">{bench_pct:.1f}%</td>
+                <td class="num" style="font-size: 9px; font-weight: 600; color: {diff_color};">{diff:+.1f}%</td>
             </tr>
         '''
 
-    # Build allocation table rows with horizontal bars
-    allocation_sorted = sorted(asset_allocation.items(), key=lambda x: x[1], reverse=True)
+    # Build allocation table rows with horizontal bars (for detailed view)
     max_alloc = allocation_sorted[0][1] if allocation_sorted else 100
     allocation_rows = ""
     for i, (asset_class, pct) in enumerate(allocation_sorted):
@@ -3301,13 +3363,38 @@ def generate_report_html(data, report_date):
         <meta charset="UTF-8">
         <title>Portfolio Analysis Report</title>
         <style>
+            /* Page Setup with proper footer positioning */
             @page {{
                 size: letter;
-                margin: 0.6in 0.7in;
+                margin: 0.7in 0.7in 1in 0.7in;
+
+                @bottom-left {{
+                    content: "Statement Scan";
+                    font-family: Helvetica, Arial, sans-serif;
+                    font-size: 8px;
+                    color: #666;
+                }}
+
+                @bottom-center {{
+                    content: "Page " counter(page) " of " counter(pages);
+                    font-family: Helvetica, Arial, sans-serif;
+                    font-size: 8px;
+                    color: #666;
+                }}
+
+                @bottom-right {{
+                    content: "{report_date}";
+                    font-family: Helvetica, Arial, sans-serif;
+                    font-size: 8px;
+                    color: #666;
+                }}
             }}
 
             @page :first {{
                 margin: 0;
+                @bottom-left {{ content: none; }}
+                @bottom-center {{ content: none; }}
+                @bottom-right {{ content: none; }}
             }}
 
             * {{
@@ -3427,13 +3514,13 @@ def generate_report_html(data, report_date):
             .page-header {{
                 border-bottom: 2px solid #635bff;
                 padding-bottom: 8px;
-                margin-bottom: 20px;
+                margin-bottom: 16px;
             }}
 
             .page-header-logo {{
                 display: inline-block;
-                width: 20px;
-                height: 20px;
+                width: 18px;
+                height: 18px;
                 background: #635bff;
                 border-radius: 3px;
                 vertical-align: middle;
@@ -3451,20 +3538,7 @@ def generate_report_html(data, report_date):
                 float: right;
                 font-size: 9px;
                 color: #666;
-                line-height: 20px;
-            }}
-
-            /* Page Footer */
-            .page-footer {{
-                position: fixed;
-                bottom: 0.4in;
-                left: 0.7in;
-                right: 0.7in;
-                text-align: center;
-                font-size: 8px;
-                color: #999;
-                padding-top: 8px;
-                border-top: 1px solid #e5e5e5;
+                line-height: 18px;
             }}
 
             /* Content Sections */
@@ -3474,18 +3548,38 @@ def generate_report_html(data, report_date):
 
             .section-header {{
                 background: #f8f9fc;
-                padding: 10px 14px;
-                margin: 18px 0 14px 0;
+                padding: 8px 12px;
+                margin: 14px 0 10px 0;
                 border-left: 4px solid #635bff;
             }}
 
             .section-header h2 {{
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 700;
                 color: #1a1a2e;
                 text-transform: uppercase;
                 letter-spacing: 0.3px;
                 margin: 0;
+            }}
+
+            /* Commentary text */
+            .commentary {{
+                font-size: 8px;
+                color: #555;
+                line-height: 1.5;
+                margin-bottom: 12px;
+                padding: 8px 10px;
+                background: #fafafa;
+                border-radius: 4px;
+            }}
+
+            /* Stacked bar chart */
+            .stacked-bar {{
+                height: 24px;
+                border-radius: 4px;
+                overflow: hidden;
+                display: flex;
+                margin-bottom: 10px;
             }}
 
             /* Metrics */
@@ -3716,6 +3810,12 @@ def generate_report_html(data, report_date):
                 <h2>Executive Overview</h2>
             </div>
 
+            <div class="commentary">
+                This portfolio analysis provides a comprehensive view of your investment holdings, including asset allocation,
+                risk metrics, sector exposure, and projected future values. Understanding these metrics helps ensure your
+                investments align with your financial goals and risk tolerance.
+            </div>
+
             <table class="metrics-table">
                 <tr>
                     <td>
@@ -3741,9 +3841,11 @@ def generate_report_html(data, report_date):
                 <h2>Historical Performance</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
-                Portfolio returns vs S&P 500 benchmark across multiple time periods.
-            </p>
+            <div class="commentary">
+                Historical returns show how your portfolio has performed compared to the S&amp;P 500 benchmark.
+                Performance across different time periods helps identify trends and evaluate whether your investment strategy
+                is achieving expected results. Past performance does not guarantee future results.
+            </div>
 
             <table style="margin-bottom: 20px; border-collapse: separate; border-spacing: 4px;">
                 <tr>
@@ -3753,6 +3855,22 @@ def generate_report_html(data, report_date):
 
             <div class="section-header">
                 <h2>Asset Allocation</h2>
+            </div>
+
+            <div class="commentary">
+                Asset allocation is one of the most important factors in determining portfolio risk and return.
+                A diversified mix of stocks, bonds, and other asset classes helps manage risk while pursuing growth.
+                The allocation below shows how your portfolio is distributed across major asset categories.
+            </div>
+
+            <!-- Visual Allocation Bar -->
+            <div style="margin-bottom: 16px;">
+                <div style="font-size: 8px; color: #666; margin-bottom: 6px; font-weight: 600;">ALLOCATION OVERVIEW</div>
+                <table style="width: 100%; height: 24px; border-collapse: collapse; table-layout: fixed;">
+                    <tr>
+                        {allocation_bar_segments}
+                    </tr>
+                </table>
             </div>
 
             <table style="margin-bottom: 16px;">
@@ -3791,9 +3909,6 @@ def generate_report_html(data, report_date):
             </table>
             ''' if sub_asset_rows else ''}
 
-            <div class="page-footer">
-                Page 2 | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
 
         <!-- Page 3: Allocation Details -->
@@ -3804,12 +3919,22 @@ def generate_report_html(data, report_date):
                 <span class="page-header-title">Portfolio Analysis Report</span>
             </div>
 
+            <div class="commentary">
+                Understanding your portfolio's sector and geographic exposure helps identify concentration risks and
+                diversification opportunities. Sector allocation affects how your portfolio responds to economic cycles,
+                while geographic exposure impacts currency risk and global market sensitivity.
+            </div>
+
             <table class="two-col-table">
                 <tr>
                     <td>
                         <div class="section-header" style="margin-top: 0;">
                             <h2>Sector Exposure</h2>
                         </div>
+                        <!-- Sector Visual Bar -->
+                        <table style="width: 100%; height: 18px; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px;">
+                            <tr>{sector_bar_segments}</tr>
+                        </table>
                         <table>
                             <thead>
                                 <tr>
@@ -3827,6 +3952,10 @@ def generate_report_html(data, report_date):
                         <div class="section-header" style="margin-top: 0;">
                             <h2>Geographic Distribution</h2>
                         </div>
+                        <!-- Geography Visual Bar -->
+                        <table style="width: 100%; height: 18px; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px;">
+                            <tr>{geo_bar_segments}</tr>
+                        </table>
                         <table>
                             <thead>
                                 <tr>
@@ -3847,9 +3976,11 @@ def generate_report_html(data, report_date):
                 <h2>Sector Comparison vs S&amp;P 500</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
-                Your portfolio sector weights compared to the S&amp;P 500 benchmark.
-            </p>
+            <div class="commentary">
+                Comparing your sector weights to the S&amp;P 500 benchmark reveals where you are overweight or underweight
+                relative to the broader market. Positive differences indicate sector bets that may enhance returns if
+                those sectors outperform, while also adding tracking risk versus the benchmark.
+            </div>
 
             <table>
                 <thead>
@@ -3867,9 +3998,6 @@ def generate_report_html(data, report_date):
                 </tbody>
             </table>
 
-            <div class="page-footer">
-                Page 3 | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
 
         <!-- Page 4: Risk Analysis -->
@@ -3882,6 +4010,13 @@ def generate_report_html(data, report_date):
 
             <div class="section-header">
                 <h2>Risk Analysis</h2>
+            </div>
+
+            <div class="commentary">
+                Risk metrics quantify the potential for loss and volatility in your portfolio. Volatility measures
+                return variability, Beta indicates market sensitivity, Sharpe Ratio shows risk-adjusted returns,
+                and Maximum Drawdown reveals the worst historical decline. These metrics help determine if the portfolio
+                matches your risk tolerance.
             </div>
 
             <table class="two-col-table" style="margin-bottom: 20px;">
@@ -3935,9 +4070,11 @@ def generate_report_html(data, report_date):
                 <h2>Top 10 Holdings (Concentration Risk)</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
-                Your largest positions by market value. Top 10 concentration: {fmt_pct(concentration.get('top_10_weight'))}
-            </p>
+            <div class="commentary">
+                High concentration in individual positions increases idiosyncratic risk. If your top 10 holdings
+                represent more than 50% of the portfolio, consider whether diversification could reduce volatility.
+                Your top 10 positions account for {fmt_pct(concentration.get('top_10_weight'))} of the total portfolio value.
+            </div>
 
             <table>
                 <thead>
@@ -3958,9 +4095,11 @@ def generate_report_html(data, report_date):
                 <h2>Scenario Analysis</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 10px;">
-                Hypothetical portfolio performance under historical and projected market scenarios.
-            </p>
+            <div class="commentary">
+                Scenario analysis shows how your portfolio might perform during market stress events. The estimated
+                portfolio impact is calculated using your portfolio's beta. These hypothetical scenarios help you
+                understand potential downside risks and prepare for market volatility.
+            </div>
 
             <table>
                 <thead>
@@ -3976,9 +4115,6 @@ def generate_report_html(data, report_date):
                 </tbody>
             </table>
 
-            <div class="page-footer">
-                Page 4 | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
 
         <!-- Page 5: Projections -->
@@ -3993,9 +4129,12 @@ def generate_report_html(data, report_date):
                 <h2>10-Year Projections (Monte Carlo Simulation)</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 16px;">
-                Simulated portfolio values based on {mc_simulations:,} random scenarios using historical return patterns and volatility assumptions.
-            </p>
+            <div class="commentary">
+                Monte Carlo simulation uses random sampling to model {mc_simulations:,} possible future outcomes based on
+                historical return patterns and your portfolio's volatility. The percentile ranges show the distribution
+                of outcomes—the median represents the most likely scenario, while the 10th and 90th percentiles show
+                pessimistic and optimistic cases respectively.
+            </div>
 
             <table class="metrics-table" style="margin-bottom: 20px;">
                 <tr>
@@ -4090,9 +4229,6 @@ def generate_report_html(data, report_date):
             </table>
             ''' if mc_summary else '<p style="color: #666; font-size: 9px;">Monte Carlo projections not available for this portfolio.</p>'}
 
-            <div class="page-footer">
-                Page 5 | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
 
         <!-- Page 6: Key Insights -->
@@ -4108,13 +4244,16 @@ def generate_report_html(data, report_date):
                 <h2>Key Insights &amp; Recommendations</h2>
             </div>
 
+            <div class="commentary">
+                Based on the analysis of your portfolio's allocation, risk metrics, and market exposures, the following
+                insights highlight areas of strength and potential opportunities for optimization. These actionable
+                recommendations can help align your portfolio with your investment objectives.
+            </div>
+
             <table style="width: 100%;">
                 {insights_rows}
             </table>
 
-            <div class="page-footer">
-                Page 6 | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
         ''' if insights_rows else ''}
 
@@ -4130,9 +4269,11 @@ def generate_report_html(data, report_date):
                 <h2>Holdings Detail</h2>
             </div>
 
-            <p style="font-size: 8px; color: #666; margin-bottom: 12px;">
-                All positions by market value. Showing {len(positions)} holdings.
-            </p>
+            <div class="commentary">
+                Complete list of all {len(positions)} positions in your portfolio, sorted by market value. The weight column
+                shows each holding's percentage of the total portfolio. Review this list periodically to ensure
+                individual position sizes remain appropriate for your risk tolerance and investment strategy.
+            </div>
 
             <table>
                 <thead>
@@ -4149,9 +4290,6 @@ def generate_report_html(data, report_date):
                 </tbody>
             </table>
 
-            <div class="page-footer">
-                Page 7 | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
 
         <!-- Final Page: Glossary & Disclosures -->
@@ -4160,6 +4298,15 @@ def generate_report_html(data, report_date):
                 <span class="page-header-logo"></span>
                 <span class="page-header-brand">Statement Scan</span>
                 <span class="page-header-title">Portfolio Analysis Report</span>
+            </div>
+
+            <div class="section-header">
+                <h2>Glossary of Terms</h2>
+            </div>
+
+            <div class="commentary">
+                This glossary defines key financial terms used throughout this report to help you better understand
+                the metrics and analysis presented.
             </div>
 
             <table class="glossary-table">
@@ -4203,9 +4350,6 @@ def generate_report_html(data, report_date):
                 <p>Statement Scan does not guarantee the accuracy, completeness, or timeliness of the information provided. Users should verify all information independently and consult with a qualified financial advisor before making investment decisions.</p>
             </div>
 
-            <div class="page-footer">
-                Glossary | Generated {report_date} | This report is for informational purposes only
-            </div>
         </div>
     </body>
     </html>
