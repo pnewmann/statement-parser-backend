@@ -2526,6 +2526,213 @@ def what_if_analysis():
         return jsonify({'error': f'What-if analysis failed: {str(e)}'}), 500
 
 
+def generate_portfolio_insights(allocations, concentration, risk_metrics, positions, projections):
+    """Generate plain English insights about the portfolio."""
+    insights = []
+
+    total_value = allocations.get('total_value', 0)
+    asset_alloc = allocations.get('asset_allocation', {})
+    sector_exp = allocations.get('sector_exposure', {})
+    geography = allocations.get('geography', {})
+
+    # Portfolio size insight
+    if total_value >= 1000000:
+        insights.append({
+            'category': 'overview',
+            'title': 'Portfolio Size',
+            'text': f"Your portfolio is valued at ${total_value:,.0f}, placing you in the high-net-worth category. Consider consulting a financial advisor for tax-optimized strategies.",
+            'type': 'info'
+        })
+    elif total_value >= 100000:
+        insights.append({
+            'category': 'overview',
+            'title': 'Portfolio Size',
+            'text': f"Your portfolio of ${total_value:,.0f} is well-established. Focus on maintaining diversification and managing risk as your wealth grows.",
+            'type': 'info'
+        })
+    else:
+        insights.append({
+            'category': 'overview',
+            'title': 'Portfolio Size',
+            'text': f"Your portfolio is valued at ${total_value:,.0f}. At this stage, focus on consistent contributions and keeping investment costs low.",
+            'type': 'info'
+        })
+
+    # Asset allocation insights
+    stocks = asset_alloc.get('Stocks', 0)
+    bonds = asset_alloc.get('Bonds', 0)
+    cash = asset_alloc.get('Cash', 0)
+
+    if stocks > 90:
+        insights.append({
+            'category': 'allocation',
+            'title': 'High Stock Concentration',
+            'text': f"Your portfolio is {stocks:.0f}% stocks, which is aggressive. This can lead to significant volatility during market downturns. Consider adding bonds or other assets for stability, especially if you're within 10 years of retirement.",
+            'type': 'warning'
+        })
+    elif stocks > 70:
+        insights.append({
+            'category': 'allocation',
+            'title': 'Growth-Oriented Portfolio',
+            'text': f"With {stocks:.0f}% in stocks and {bonds:.0f}% in bonds, your portfolio is positioned for growth. This is appropriate if you have a long time horizon (10+ years) and can tolerate market swings.",
+            'type': 'info'
+        })
+    elif stocks > 40:
+        insights.append({
+            'category': 'allocation',
+            'title': 'Balanced Portfolio',
+            'text': f"Your {stocks:.0f}% stocks / {bonds:.0f}% bonds allocation is balanced. This provides a mix of growth potential and stability, suitable for moderate risk tolerance.",
+            'type': 'positive'
+        })
+    elif bonds > 50:
+        insights.append({
+            'category': 'allocation',
+            'title': 'Conservative Portfolio',
+            'text': f"With {bonds:.0f}% in bonds, your portfolio is conservative. This provides stability but may not keep pace with inflation long-term. If you have many years until retirement, consider increasing stock exposure.",
+            'type': 'info'
+        })
+
+    if cash > 15:
+        insights.append({
+            'category': 'allocation',
+            'title': 'High Cash Position',
+            'text': f"You're holding {cash:.0f}% in cash, which is above typical recommendations (3-6 months expenses). While cash provides safety, it loses value to inflation over time. Consider deploying excess cash into diversified investments.",
+            'type': 'warning'
+        })
+
+    # Concentration risk
+    top_holdings = concentration.get('top_10_weight', 0)
+    if top_holdings > 50:
+        top_names = [h.get('symbol', 'Unknown') for h in concentration.get('top_holdings', [])[:3]]
+        insights.append({
+            'category': 'risk',
+            'title': 'Concentration Risk',
+            'text': f"Your top 10 holdings represent {top_holdings:.0f}% of your portfolio, with heavy positions in {', '.join(top_names)}. Consider diversifying to reduce single-stock risk.",
+            'type': 'warning'
+        })
+    elif top_holdings < 30:
+        insights.append({
+            'category': 'risk',
+            'title': 'Well Diversified',
+            'text': f"Your top 10 holdings represent just {top_holdings:.0f}% of your portfolio. This diversification helps protect against individual stock volatility.",
+            'type': 'positive'
+        })
+
+    # Sector concentration
+    if sector_exp:
+        top_sector = max(sector_exp.items(), key=lambda x: x[1]) if sector_exp else ('N/A', 0)
+        if top_sector[1] > 40:
+            insights.append({
+                'category': 'sectors',
+                'title': f'Heavy {top_sector[0]} Exposure',
+                'text': f"You have {top_sector[1]:.0f}% of your portfolio in {top_sector[0]}. While sector bets can pay off, they also increase risk if that sector underperforms. The S&P 500 has about 30% in Technology for comparison.",
+                'type': 'warning'
+            })
+
+    # Geographic diversification
+    us_exposure = geography.get('US', 0)
+    if us_exposure > 90:
+        insights.append({
+            'category': 'geography',
+            'title': 'US-Concentrated Portfolio',
+            'text': f"Your portfolio is {us_exposure:.0f}% US-based. While US markets have performed well historically, international diversification can reduce risk and capture global growth opportunities. Consider allocating 20-40% internationally.",
+            'type': 'info'
+        })
+    elif us_exposure < 50:
+        intl = 100 - us_exposure
+        insights.append({
+            'category': 'geography',
+            'title': 'Strong International Exposure',
+            'text': f"With {intl:.0f}% international exposure, you're well-diversified globally. This can provide access to faster-growing economies, though it may also add currency risk.",
+            'type': 'positive'
+        })
+
+    # Risk metrics insights
+    if risk_metrics:
+        volatility = risk_metrics.get('volatility')
+        beta = risk_metrics.get('beta')
+        sharpe = risk_metrics.get('sharpe_ratio')
+
+        if volatility and volatility > 20:
+            insights.append({
+                'category': 'risk',
+                'title': 'High Volatility',
+                'text': f"Your portfolio's volatility is {volatility:.1f}%, higher than the typical 15-18% for a balanced portfolio. This means larger swings in value—both up and down. Ensure this matches your risk tolerance.",
+                'type': 'warning'
+            })
+        elif volatility and volatility < 12:
+            insights.append({
+                'category': 'risk',
+                'title': 'Low Volatility',
+                'text': f"Your portfolio's volatility of {volatility:.1f}% is relatively low, suggesting a conservative approach. This provides stability but may limit long-term growth potential.",
+                'type': 'info'
+            })
+
+        if beta and beta > 1.2:
+            insights.append({
+                'category': 'risk',
+                'title': 'High Market Sensitivity',
+                'text': f"Your portfolio beta of {beta:.2f} means it tends to move more than the market. When stocks rise 10%, you might gain 12%+, but losses are amplified too.",
+                'type': 'warning'
+            })
+        elif beta and beta < 0.8:
+            insights.append({
+                'category': 'risk',
+                'title': 'Defensive Portfolio',
+                'text': f"With a beta of {beta:.2f}, your portfolio is less sensitive to market movements. This can provide protection during downturns but may lag in strong bull markets.",
+                'type': 'info'
+            })
+
+        if sharpe and sharpe > 1:
+            insights.append({
+                'category': 'risk',
+                'title': 'Strong Risk-Adjusted Returns',
+                'text': f"Your Sharpe ratio of {sharpe:.2f} indicates you're earning good returns relative to the risk you're taking. A ratio above 1 is generally considered good.",
+                'type': 'positive'
+            })
+        elif sharpe and sharpe < 0.5:
+            insights.append({
+                'category': 'risk',
+                'title': 'Low Risk-Adjusted Returns',
+                'text': f"Your Sharpe ratio of {sharpe:.2f} suggests the returns may not be compensating adequately for the risk. Consider whether adjusting your allocation could improve this.",
+                'type': 'warning'
+            })
+
+    # Projections insight
+    if projections and projections.get('monte_carlo'):
+        mc = projections['monte_carlo']
+        summary = mc.get('summary', {})
+        prob_gain = summary.get('prob_gain', 0)
+        median = summary.get('median', 0)
+
+        if prob_gain and median:
+            insights.append({
+                'category': 'projections',
+                'title': '10-Year Outlook',
+                'text': f"Based on Monte Carlo simulation, there's a {prob_gain:.0f}% chance your portfolio grows over the next 10 years. The median projected value is ${median:,.0f}. Remember, past performance doesn't guarantee future results.",
+                'type': 'info'
+            })
+
+    # Number of holdings insight
+    num_holdings = len(positions)
+    if num_holdings < 5:
+        insights.append({
+            'category': 'overview',
+            'title': 'Limited Holdings',
+            'text': f"You have only {num_holdings} holdings. Consider adding more positions or using diversified ETFs to reduce individual stock risk.",
+            'type': 'warning'
+        })
+    elif num_holdings > 50:
+        insights.append({
+            'category': 'overview',
+            'title': 'Many Holdings',
+            'text': f"With {num_holdings} holdings, your portfolio is well-diversified but may be complex to manage. Consider consolidating into broad ETFs for simplicity while maintaining diversification.",
+            'type': 'info'
+        })
+
+    return insights
+
+
 @app.route('/analyze', methods=['POST'])
 def analyze_portfolio():
     """Analyze a portfolio and return comprehensive analytics."""
@@ -2571,6 +2778,11 @@ def analyze_portfolio():
             classified_pos['classification'] = classification
             classified_positions.append(classified_pos)
 
+        # Generate plain English insights
+        insights = generate_portfolio_insights(
+            allocations, concentration, risk_metrics, classified_positions, projections
+        )
+
         return jsonify({
             'positions': classified_positions,
             'total_value': allocations['total_value'],
@@ -2584,7 +2796,8 @@ def analyze_portfolio():
             'risk_metrics': risk_metrics,
             'historical_performance': historical_performance,
             'scenario_analysis': scenario_analysis,
-            'projections': projections
+            'projections': projections,
+            'insights': insights
         })
 
     except Exception as e:
