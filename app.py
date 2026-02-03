@@ -1179,6 +1179,43 @@ def get_market_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/quote/<symbol>', methods=['GET'])
+def get_quote(symbol):
+    """Get current price quote for a symbol."""
+    try:
+        if not YFINANCE_AVAILABLE:
+            return jsonify({'error': 'Quote service unavailable'}), 503
+
+        symbol = symbol.upper().strip()
+        ticker = yf.Ticker(symbol)
+
+        # Get current price
+        hist = ticker.history(period='5d')
+        if hist.empty:
+            return jsonify({'error': f'Symbol {symbol} not found'}), 404
+
+        current_price = float(hist['Close'].iloc[-1])
+        previous_close = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else current_price
+        change = current_price - previous_close
+        change_percent = (change / previous_close * 100) if previous_close > 0 else 0
+
+        # Get additional info
+        info = ticker.info
+        name = info.get('shortName') or info.get('longName') or symbol
+
+        return jsonify({
+            'symbol': symbol,
+            'name': name,
+            'price': round(current_price, 2),
+            'change': round(change, 2),
+            'changePercent': round(change_percent, 2),
+            'currency': info.get('currency', 'USD')
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # =============================================================================
 # AUTHENTICATION ENDPOINTS
 # =============================================================================
