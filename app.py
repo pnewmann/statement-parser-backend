@@ -1179,6 +1179,50 @@ def get_market_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/search', methods=['GET'])
+def search_stocks():
+    """Search for stocks by name or symbol."""
+    try:
+        import requests
+
+        query = request.args.get('q', '').strip()
+        if not query or len(query) < 1:
+            return jsonify({'results': []})
+
+        # Use Yahoo Finance search API
+        url = f"https://query1.finance.yahoo.com/v1/finance/search"
+        params = {
+            'q': query,
+            'quotesCount': 8,
+            'newsCount': 0,
+            'enableFuzzyQuery': True,
+            'quotesQueryId': 'tss_match_phrase_query'
+        }
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+
+        response = requests.get(url, params=params, headers=headers, timeout=5)
+        data = response.json()
+
+        results = []
+        for quote in data.get('quotes', []):
+            # Filter to stocks and ETFs only
+            quote_type = quote.get('quoteType', '')
+            if quote_type in ['EQUITY', 'ETF']:
+                results.append({
+                    'symbol': quote.get('symbol', ''),
+                    'name': quote.get('shortname') or quote.get('longname', ''),
+                    'type': quote_type,
+                    'exchange': quote.get('exchange', '')
+                })
+
+        return jsonify({'results': results})
+
+    except Exception as e:
+        return jsonify({'results': [], 'error': str(e)})
+
+
 @app.route('/quote/<symbol>', methods=['GET'])
 def get_quote(symbol):
     """Get current price quote for a symbol."""
