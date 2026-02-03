@@ -752,7 +752,7 @@ def detect_brokerage_pdf(text):
         return 'etrade'
     elif 'robinhood' in text_lower:
         return 'robinhood'
-    elif 'stifel' in text_lower:
+    elif 'stifel' in text_lower or 'lefits' in text_lower:
         return 'stifel'
     return 'unknown'
 
@@ -943,78 +943,58 @@ def parse_stifel_pdf(pdf):
         text = page.extract_text() or ""
         full_text += text + "\n"
 
+    # Check if text is reversed (Stifel PDFs sometimes extract as reversed text)
+    # If we see 'lefitS' instead of 'Stifel', the text is reversed
+    if 'lefits' in full_text.lower() and 'stifel' not in full_text.lower():
+        # Reverse each line's characters
+        lines = full_text.split('\n')
+        lines = [line[::-1] for line in lines]
+        full_text = '\n'.join(lines)
+
     lines = full_text.split('\n')
 
-    in_portfolio_section = False
-
+    # Look for known mutual fund symbols in the text
     for line in lines:
-        # Check for portfolio assets section
-        if 'PORTFOLIO ASSETS' in line.upper() or 'HELD AT STIFEL' in line.upper():
-            in_portfolio_section = True
-            continue
+        # Check for known symbols (both original and reversed)
+        for symbol in KNOWN_SYMBOLS:
+            reversed_symbol = symbol[::-1]
+            found_symbol = None
 
-        # Check for end of section
-        if in_portfolio_section and ('TOTAL' in line.upper() and 'PORTFOLIO' in line.upper()):
-            in_portfolio_section = False
-            continue
+            if symbol in line:
+                found_symbol = symbol
+            elif reversed_symbol in line:
+                found_symbol = symbol  # Use original symbol for the position
+                line = line[::-1]  # Reverse the line to extract numbers correctly
 
-        if in_portfolio_section:
-            # Skip header lines
-            if 'Symbol' in line or 'Current Price' in line or 'Cost Basis' in line:
-                continue
+            if found_symbol:
+                # Extract all numbers from the line
+                numbers = re.findall(r'[\d,]+\.[\d]+', line)
 
-            # Look for known mutual fund symbols
-            for symbol in KNOWN_SYMBOLS:
-                if line.strip().startswith(symbol) or f' {symbol} ' in line or f'\t{symbol}\t' in line:
-                    # Extract all numbers from the line
-                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                if len(numbers) >= 2:
+                    # Stifel format varies - try to identify value vs shares
+                    # Numbers might be: shares, price, value, cost_basis, gain/loss, income, yield
+                    shares = clean_number(numbers[0])
 
-                    if len(numbers) >= 2:
-                        # Stifel format: Symbol, Quantity, Price, Value, Cost Basis, Gain/Loss, Income, Yield
-                        shares = clean_number(numbers[0])
-                        price = clean_number(numbers[1]) if len(numbers) > 1 else None
-                        value = clean_number(numbers[2]) if len(numbers) > 2 else None
+                    # Find the largest number as the likely value
+                    all_nums = [clean_number(n) for n in numbers]
+                    value = max(all_nums) if all_nums else None
 
-                        # If value seems too small (might be price), recalculate
-                        if value and shares and value < shares:
-                            # Values are likely: shares, price, value
-                            value = clean_number(numbers[2]) if len(numbers) > 2 else shares * price if price else None
+                    # Calculate price from value/shares
+                    price = None
+                    if shares and value and shares > 0:
+                        price = round(value / shares, 2)
 
-                        position = {
-                            'symbol': symbol,
-                            'description': '',
-                            'shares': shares,
-                            'price': price,
-                            'value': value
-                        }
+                    position = {
+                        'symbol': found_symbol,
+                        'description': '',
+                        'shares': shares,
+                        'price': price,
+                        'value': value
+                    }
 
-                        # Calculate price if missing
-                        if position['shares'] and position['value'] and not position['price']:
-                            position['price'] = round(position['value'] / position['shares'], 2)
-
-                        if not any(p['symbol'] == symbol for p in positions):
-                            positions.append(position)
-                    break
-        else:
-            # Also search outside the section for known symbols
-            for symbol in KNOWN_SYMBOLS:
-                if symbol in line:
-                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
-                    if len(numbers) >= 2:
-                        position = {
-                            'symbol': symbol,
-                            'description': '',
-                            'shares': clean_number(numbers[0]) if numbers else None,
-                            'price': None,
-                            'value': clean_number(numbers[-1]) if numbers else None
-                        }
-
-                        if position['shares'] and position['value']:
-                            position['price'] = round(position['value'] / position['shares'], 2)
-
-                        if not any(p['symbol'] == symbol for p in positions):
-                            positions.append(position)
-                    break
+                    if not any(p['symbol'] == found_symbol for p in positions):
+                        positions.append(position)
+                break
 
     return positions
 
