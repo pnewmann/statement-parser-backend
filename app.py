@@ -621,6 +621,9 @@ KNOWN_SYMBOLS = {
     'ADBE', 'NFLX', 'CRM', 'PFE', 'TMO', 'PEP', 'AVGO', 'CSCO', 'ACN',
     'WMT', 'KO', 'MRK', 'ABT', 'CVX', 'XOM', 'LLY', 'ABBV', 'ORCL', 'AMD',
     'INTC', 'QCOM', 'TXN', 'IBM', 'GE', 'CAT', 'BA', 'MMM', 'HON', 'UPS',
+    # Stifel mutual funds
+    'COSZX', 'AEPFX', 'FCDIX', 'GFFFX', 'GIBIX', 'LAPIX', 'NFFFX', 'PIGIX',
+    'PIMIX', 'PCBIX', 'VSIGX', 'WMFFX',
 }
 
 
@@ -749,6 +752,8 @@ def detect_brokerage_pdf(text):
         return 'etrade'
     elif 'robinhood' in text_lower:
         return 'robinhood'
+    elif 'stifel' in text_lower:
+        return 'stifel'
     return 'unknown'
 
 
@@ -929,6 +934,91 @@ def parse_fidelity_pdf(pdf):
     return positions
 
 
+def parse_stifel_pdf(pdf):
+    """Parse Stifel brokerage statement."""
+    positions = []
+
+    full_text = ""
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        full_text += text + "\n"
+
+    lines = full_text.split('\n')
+
+    in_portfolio_section = False
+
+    for line in lines:
+        # Check for portfolio assets section
+        if 'PORTFOLIO ASSETS' in line.upper() or 'HELD AT STIFEL' in line.upper():
+            in_portfolio_section = True
+            continue
+
+        # Check for end of section
+        if in_portfolio_section and ('TOTAL' in line.upper() and 'PORTFOLIO' in line.upper()):
+            in_portfolio_section = False
+            continue
+
+        if in_portfolio_section:
+            # Skip header lines
+            if 'Symbol' in line or 'Current Price' in line or 'Cost Basis' in line:
+                continue
+
+            # Look for known mutual fund symbols
+            for symbol in KNOWN_SYMBOLS:
+                if line.strip().startswith(symbol) or f' {symbol} ' in line or f'\t{symbol}\t' in line:
+                    # Extract all numbers from the line
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+
+                    if len(numbers) >= 2:
+                        # Stifel format: Symbol, Quantity, Price, Value, Cost Basis, Gain/Loss, Income, Yield
+                        shares = clean_number(numbers[0])
+                        price = clean_number(numbers[1]) if len(numbers) > 1 else None
+                        value = clean_number(numbers[2]) if len(numbers) > 2 else None
+
+                        # If value seems too small (might be price), recalculate
+                        if value and shares and value < shares:
+                            # Values are likely: shares, price, value
+                            value = clean_number(numbers[2]) if len(numbers) > 2 else shares * price if price else None
+
+                        position = {
+                            'symbol': symbol,
+                            'description': '',
+                            'shares': shares,
+                            'price': price,
+                            'value': value
+                        }
+
+                        # Calculate price if missing
+                        if position['shares'] and position['value'] and not position['price']:
+                            position['price'] = round(position['value'] / position['shares'], 2)
+
+                        if not any(p['symbol'] == symbol for p in positions):
+                            positions.append(position)
+                    break
+        else:
+            # Also search outside the section for known symbols
+            for symbol in KNOWN_SYMBOLS:
+                if symbol in line:
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    if len(numbers) >= 2:
+                        position = {
+                            'symbol': symbol,
+                            'description': '',
+                            'shares': clean_number(numbers[0]) if numbers else None,
+                            'price': None,
+                            'value': clean_number(numbers[-1]) if numbers else None
+                        }
+
+                        if position['shares'] and position['value']:
+                            position['price'] = round(position['value'] / position['shares'], 2)
+
+                        if not any(p['symbol'] == symbol for p in positions):
+                            positions.append(position)
+                    break
+
+    return positions
+
+
 def parse_csv_file(content):
     """Parse a CSV file from various brokerages."""
     positions = []
@@ -1023,6 +1113,8 @@ def parse_pdf_file(content):
             positions = parse_schwab_pdf(pdf)
         elif brokerage == 'fidelity':
             positions = parse_fidelity_pdf(pdf)
+        elif brokerage == 'stifel':
+            positions = parse_stifel_pdf(pdf)
         else:
             # Generic text-based parsing
             for page in pdf.pages:
