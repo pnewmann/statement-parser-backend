@@ -949,52 +949,52 @@ def parse_stifel_pdf(pdf):
         # Reverse each line's characters
         lines = full_text.split('\n')
         lines = [line[::-1] for line in lines]
-        full_text = '\n'.join(lines)
+    else:
+        lines = full_text.split('\n')
 
-    lines = full_text.split('\n')
+    # Find each symbol and look at surrounding lines for numbers
+    # Stifel format has symbol on its own line with data on preceding lines
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
 
-    # Look for known mutual fund symbols in the text
-    for line in lines:
-        # Check for known symbols (both original and reversed)
-        for symbol in KNOWN_SYMBOLS:
-            reversed_symbol = symbol[::-1]
-            found_symbol = None
+        # Check if this line is a known symbol
+        if line_stripped in KNOWN_SYMBOLS:
+            symbol = line_stripped
 
-            if symbol in line:
-                found_symbol = symbol
-            elif reversed_symbol in line:
-                found_symbol = symbol  # Use original symbol for the position
-                line = line[::-1]  # Reverse the line to extract numbers correctly
+            # Look at the 10 lines BEFORE the symbol (where data should be)
+            context_lines = lines[max(0, i-10):i]
 
-            if found_symbol:
-                # Extract all numbers from the line
-                numbers = re.findall(r'[\d,]+\.[\d]+', line)
+            # Extract numbers from each line (in reverse order to get closest first)
+            numbers = []
+            for ctx_line in reversed(context_lines):
+                matches = re.findall(r'[\d,]+\.\d+', ctx_line.strip())
+                for m in matches:
+                    numbers.append(clean_number(m))
 
-                if len(numbers) >= 2:
-                    # Stifel format varies - try to identify value vs shares
-                    # Numbers might be: shares, price, value, cost_basis, gain/loss, income, yield
-                    shares = clean_number(numbers[0])
+            if len(numbers) >= 3:
+                # First number is typically shares (quantity)
+                shares = numbers[0] if numbers[0] > 1 else None
 
-                    # Find the largest number as the likely value
-                    all_nums = [clean_number(n) for n in numbers]
-                    value = max(all_nums) if all_nums else None
+                # Find price - typically between $5 and $150 for mutual funds
+                price = None
+                for n in numbers[1:5]:
+                    if 5 <= n <= 150:
+                        price = n
+                        break
 
-                    # Calculate price from value/shares
-                    price = None
-                    if shares and value and shares > 0:
-                        price = round(value / shares, 2)
+                if shares and price:
+                    value = round(shares * price, 2)
 
                     position = {
-                        'symbol': found_symbol,
+                        'symbol': symbol,
                         'description': '',
                         'shares': shares,
                         'price': price,
                         'value': value
                     }
 
-                    if not any(p['symbol'] == found_symbol for p in positions):
+                    if not any(p['symbol'] == symbol for p in positions):
                         positions.append(position)
-                break
 
     return positions
 
