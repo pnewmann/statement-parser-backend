@@ -1134,6 +1134,51 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+@app.route('/market', methods=['GET'])
+def get_market_data():
+    """Get live market data for major indices and assets."""
+    try:
+        if not YFINANCE_AVAILABLE:
+            return jsonify({'error': 'Market data unavailable'}), 503
+
+        # Symbols to fetch
+        symbols = {
+            'spy': '^GSPC',      # S&P 500 index
+            'qqq': '^IXIC',      # NASDAQ Composite
+            'dia': '^DJI',       # Dow Jones
+            'vix': '^VIX',       # VIX
+            'tlt': '^TNX',       # 10-Year Treasury Yield
+            'gld': 'GC=F',       # Gold Futures
+            'btc': 'BTC-USD'     # Bitcoin
+        }
+
+        result = {}
+
+        for key, symbol in symbols.items():
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period='2d')
+
+                if not hist.empty and len(hist) >= 1:
+                    current = float(hist['Close'].iloc[-1])
+                    previous = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else current
+                    change_pct = ((current - previous) / previous * 100) if previous > 0 else 0
+
+                    result[key] = {
+                        'value': round(current, 2),
+                        'change': round(change_pct, 2)
+                    }
+                else:
+                    result[key] = {'value': None, 'change': None}
+            except Exception:
+                result[key] = {'value': None, 'change': None}
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # =============================================================================
 # AUTHENTICATION ENDPOINTS
 # =============================================================================
