@@ -1938,10 +1938,10 @@ def calculate_risk_metrics(positions):
                 'error': 'No price data available'
             }
 
-        # Handle single symbol case
-        if len(symbols) == 1:
+        # Handle single symbol case - ensure data is a DataFrame
+        if isinstance(data, pd.Series):
             data = data.to_frame()
-            data.columns = [symbols[0]]
+            data.columns = symbols + ['SPY'] if 'SPY' in symbols else [symbols[0]]
 
         # Calculate daily returns
         returns = data.pct_change().dropna()
