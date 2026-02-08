@@ -743,7 +743,10 @@ def is_valid_symbol(text):
 def detect_brokerage_pdf(text):
     """Detect which brokerage the PDF is from."""
     text_lower = text.lower()
-    if 'charles schwab' in text_lower or 'schwab' in text_lower:
+    # Check Acropolis/retirement plans FIRST (they contain Vanguard fund names)
+    if 'acropolis' in text_lower or ('profit sharing plan' in text_lower and 'your market value' in text_lower):
+        return 'acropolis'
+    elif 'charles schwab' in text_lower or 'schwab' in text_lower:
         return 'schwab'
     elif 'fidelity' in text_lower:
         return 'fidelity'
@@ -757,8 +760,6 @@ def detect_brokerage_pdf(text):
         return 'robinhood'
     elif 'stifel' in text_lower or 'lefits' in text_lower:
         return 'stifel'
-    elif 'acropolis' in text_lower or 'profit sharing plan' in text_lower:
-        return 'acropolis'
     return 'unknown'
 
 
@@ -1008,126 +1009,125 @@ def parse_acropolis_pdf(pdf):
     """Parse Acropolis Investment Management retirement plan statement.
 
     Acropolis statements (401k/Profit Sharing) have holdings in 'YOUR MARKET VALUE'
-    section on page 3, with fund names that map to Vanguard institutional tickers.
+    section, with fund names that map to Vanguard institutional tickers.
+    Format: Investment | Asset Class | Number of Shares | Price Per Share | Value | % Assets
     """
     positions = []
 
-    # Fund name to ticker mapping for Acropolis/retirement plans
-    FUND_TICKER_MAP = {
-        'vanguard total bond market index i': 'VBTIX',
-        'vanguard institutional index i': 'VINIX',
-        'vanguard total intl stock index i': 'VTSNX',
-        'vanguard total international stock index i': 'VTSNX',
-        'vanguard total stock market index i': 'VTSAX',
-        'vanguard 500 index i': 'VFIAX',
-        'vanguard target retirement': None,  # Various dates, handle separately
-    }
+    # Fund name patterns to ticker mapping
+    FUND_PATTERNS = [
+        ('vanguard total bond market index', 'VBTIX'),
+        ('vanguard institutional index', 'VINIX'),
+        ('vanguard total intl stock index', 'VTSNX'),
+        ('vanguard total international stock', 'VTSNX'),
+        ('vanguard total stock market', 'VTSAX'),
+        ('vanguard 500 index', 'VFIAX'),
+        ('vanguard balanced index', 'VBIAX'),
+        ('vanguard small cap index', 'VSCIX'),
+        ('vanguard mid cap index', 'VMCIX'),
+        ('vanguard developed markets', 'VTMGX'),
+        ('vanguard real estate', 'VGSLX'),
+    ]
 
-    full_text = ""
-    for page in pdf.pages:
-        text = page.extract_text() or ""
-        full_text += text + "\n"
+    # First try table extraction on page 3 (index 2) where YOUR MARKET VALUE typically is
+    for page_idx, page in enumerate(pdf.pages):
+        tables = page.extract_tables()
+        for table in tables:
+            if not table:
+                continue
+            # Check if this looks like the market value table
+            for row in table:
+                if not row or len(row) < 4:
+                    continue
+                row_text = ' '.join(str(cell or '') for cell in row).lower()
 
-    lines = full_text.split('\n')
+                # Skip header rows
+                if 'investment' in row_text and 'shares' in row_text:
+                    continue
+                if 'investment model' in row_text:
+                    continue
 
-    # Look for "YOUR MARKET VALUE" section
-    in_market_value_section = False
+                # Try to match fund patterns
+                for fund_pattern, ticker in FUND_PATTERNS:
+                    if fund_pattern in row_text:
+                        # Extract numbers from the row
+                        numbers = []
+                        for cell in row:
+                            if cell:
+                                cell_nums = re.findall(r'[\d,]+\.[\d]+', str(cell))
+                                for n in cell_nums:
+                                    val = clean_number(n)
+                                    if val is not None:
+                                        numbers.append(val)
 
-    for i, line in enumerate(lines):
-        line_lower = line.lower().strip()
+                        if len(numbers) >= 3:
+                            # Format: Shares, Price, Value, Percent
+                            shares = numbers[0]
+                            price = numbers[1]
+                            value = numbers[2]
 
-        # Detect market value section
-        if 'your market value' in line_lower:
-            in_market_value_section = True
-            continue
+                            # Validate shares * price ≈ value
+                            if shares and price and value:
+                                expected = shares * price
+                                if abs(expected - value) < value * 0.05:
+                                    position = {
+                                        'symbol': ticker,
+                                        'description': fund_pattern.title(),
+                                        'shares': shares,
+                                        'price': price,
+                                        'value': value
+                                    }
+                                    if not any(p['symbol'] == ticker for p in positions):
+                                        positions.append(position)
+                        break
 
-        # Exit section on next major header
-        if in_market_value_section and ('fund performance' in line_lower or
-                                         'account activity' in line_lower or
-                                         'transaction' in line_lower):
-            in_market_value_section = False
-            continue
+    # Fallback: text-based parsing
+    if not positions:
+        full_text = ""
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            full_text += text + "\n"
 
-        if not in_market_value_section:
-            continue
+        lines = full_text.split('\n')
+        in_market_value = False
 
-        # Try to match fund names from our map
-        for fund_name, ticker in FUND_TICKER_MAP.items():
-            if fund_name in line_lower and ticker:
-                # Found a fund - now extract the numbers
-                # Look at this line and next few lines for numeric data
-                context = line + " " + " ".join(lines[i+1:i+4])
+        for line in lines:
+            line_lower = line.lower().strip()
 
-                # Extract all numbers from context
-                numbers = re.findall(r'[\d,]+\.[\d]+', context)
-                numbers = [clean_number(n) for n in numbers if clean_number(n)]
-
-                if len(numbers) >= 3:
-                    # Acropolis format: Shares, Price, Value, % (in order)
-                    shares = numbers[0]
-                    price = numbers[1] if numbers[1] and numbers[1] < 1000 else None
-                    value = numbers[2] if len(numbers) > 2 else None
-
-                    # Validate: value should be roughly shares * price
-                    if shares and price and value:
-                        expected = shares * price
-                        if abs(expected - value) > value * 0.1:  # Allow 10% variance
-                            # Try to find correct value in numbers
-                            for n in numbers:
-                                if abs(shares * price - n) < n * 0.05:
-                                    value = n
-                                    break
-
-                    if shares and value:
-                        position = {
-                            'symbol': ticker,
-                            'description': fund_name.title(),
-                            'shares': shares,
-                            'price': price,
-                            'value': value
-                        }
-
-                        if not any(p['symbol'] == ticker for p in positions):
-                            positions.append(position)
+            if 'your market value' in line_lower:
+                in_market_value = True
+                continue
+            if in_market_value and ('fund performance' in line_lower or 'summary of expenses' in line_lower):
                 break
 
-    # Fallback: scan for known institutional symbols directly
-    if not positions:
-        for i, line in enumerate(lines):
-            line_stripped = line.strip().upper()
+            if not in_market_value:
+                continue
 
-            for symbol in ['VBTIX', 'VINIX', 'VTSNX', 'VTSAX', 'VFIAX', 'VTIAX']:
-                if symbol in line_stripped:
-                    # Get surrounding lines for context
-                    context = " ".join(lines[max(0, i-2):i+3])
-                    numbers = re.findall(r'[\d,]+\.[\d]+', context)
-                    numbers = [clean_number(n) for n in numbers if clean_number(n)]
+            # Try to match fund patterns in this line
+            for fund_pattern, ticker in FUND_PATTERNS:
+                if fund_pattern in line_lower:
+                    # Extract all numbers from this line
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    numbers = [clean_number(n) for n in numbers if clean_number(n) is not None]
 
-                    if len(numbers) >= 2:
-                        shares = numbers[0] if numbers[0] > 1 else None
-                        price = None
-                        value = None
+                    if len(numbers) >= 3:
+                        shares = numbers[0]
+                        price = numbers[1]
+                        value = numbers[2]
 
-                        for n in numbers[1:]:
-                            if 5 <= n <= 1000:
-                                price = n
-                            elif n > 1000:
-                                value = n
-
-                        if shares and (value or price):
-                            if not value and price:
-                                value = round(shares * price, 2)
-
-                            position = {
-                                'symbol': symbol,
-                                'description': '',
-                                'shares': shares,
-                                'price': price,
-                                'value': value
-                            }
-
-                            if not any(p['symbol'] == symbol for p in positions):
-                                positions.append(position)
+                        # Validate
+                        if shares and price and value and shares * price > 0:
+                            expected = shares * price
+                            if abs(expected - value) < value * 0.1:
+                                position = {
+                                    'symbol': ticker,
+                                    'description': fund_pattern.title(),
+                                    'shares': shares,
+                                    'price': price,
+                                    'value': value
+                                }
+                                if not any(p['symbol'] == ticker for p in positions):
+                                    positions.append(position)
                     break
 
     return positions
