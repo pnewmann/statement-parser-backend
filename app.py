@@ -624,6 +624,9 @@ KNOWN_SYMBOLS = {
     # Stifel mutual funds
     'COSZX', 'AEPFX', 'FCDIX', 'GFFFX', 'GIBIX', 'LAPIX', 'NFFFX', 'PIGIX',
     'PIMIX', 'PCBIX', 'VSIGX', 'WMFFX',
+    # Vanguard Institutional funds (retirement plans, 401k)
+    'VBTIX', 'VINIX', 'VTSNX', 'VTIAX', 'VTSAX', 'VFIAX', 'VBTLX', 'VBIAX',
+    'VTABX', 'VWENX', 'VWELX', 'VPMAX', 'VWUAX', 'VWINX', 'VGSNX', 'VIPIX',
 }
 
 
@@ -754,6 +757,8 @@ def detect_brokerage_pdf(text):
         return 'robinhood'
     elif 'stifel' in text_lower or 'lefits' in text_lower:
         return 'stifel'
+    elif 'acropolis' in text_lower or 'profit sharing plan' in text_lower:
+        return 'acropolis'
     return 'unknown'
 
 
@@ -999,6 +1004,135 @@ def parse_stifel_pdf(pdf):
     return positions
 
 
+def parse_acropolis_pdf(pdf):
+    """Parse Acropolis Investment Management retirement plan statement.
+
+    Acropolis statements (401k/Profit Sharing) have holdings in 'YOUR MARKET VALUE'
+    section on page 3, with fund names that map to Vanguard institutional tickers.
+    """
+    positions = []
+
+    # Fund name to ticker mapping for Acropolis/retirement plans
+    FUND_TICKER_MAP = {
+        'vanguard total bond market index i': 'VBTIX',
+        'vanguard institutional index i': 'VINIX',
+        'vanguard total intl stock index i': 'VTSNX',
+        'vanguard total international stock index i': 'VTSNX',
+        'vanguard total stock market index i': 'VTSAX',
+        'vanguard 500 index i': 'VFIAX',
+        'vanguard target retirement': None,  # Various dates, handle separately
+    }
+
+    full_text = ""
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        full_text += text + "\n"
+
+    lines = full_text.split('\n')
+
+    # Look for "YOUR MARKET VALUE" section
+    in_market_value_section = False
+
+    for i, line in enumerate(lines):
+        line_lower = line.lower().strip()
+
+        # Detect market value section
+        if 'your market value' in line_lower:
+            in_market_value_section = True
+            continue
+
+        # Exit section on next major header
+        if in_market_value_section and ('fund performance' in line_lower or
+                                         'account activity' in line_lower or
+                                         'transaction' in line_lower):
+            in_market_value_section = False
+            continue
+
+        if not in_market_value_section:
+            continue
+
+        # Try to match fund names from our map
+        for fund_name, ticker in FUND_TICKER_MAP.items():
+            if fund_name in line_lower and ticker:
+                # Found a fund - now extract the numbers
+                # Look at this line and next few lines for numeric data
+                context = line + " " + " ".join(lines[i+1:i+4])
+
+                # Extract all numbers from context
+                numbers = re.findall(r'[\d,]+\.[\d]+', context)
+                numbers = [clean_number(n) for n in numbers if clean_number(n)]
+
+                if len(numbers) >= 3:
+                    # Acropolis format: Shares, Price, Value, % (in order)
+                    shares = numbers[0]
+                    price = numbers[1] if numbers[1] and numbers[1] < 1000 else None
+                    value = numbers[2] if len(numbers) > 2 else None
+
+                    # Validate: value should be roughly shares * price
+                    if shares and price and value:
+                        expected = shares * price
+                        if abs(expected - value) > value * 0.1:  # Allow 10% variance
+                            # Try to find correct value in numbers
+                            for n in numbers:
+                                if abs(shares * price - n) < n * 0.05:
+                                    value = n
+                                    break
+
+                    if shares and value:
+                        position = {
+                            'symbol': ticker,
+                            'description': fund_name.title(),
+                            'shares': shares,
+                            'price': price,
+                            'value': value
+                        }
+
+                        if not any(p['symbol'] == ticker for p in positions):
+                            positions.append(position)
+                break
+
+    # Fallback: scan for known institutional symbols directly
+    if not positions:
+        for i, line in enumerate(lines):
+            line_stripped = line.strip().upper()
+
+            for symbol in ['VBTIX', 'VINIX', 'VTSNX', 'VTSAX', 'VFIAX', 'VTIAX']:
+                if symbol in line_stripped:
+                    # Get surrounding lines for context
+                    context = " ".join(lines[max(0, i-2):i+3])
+                    numbers = re.findall(r'[\d,]+\.[\d]+', context)
+                    numbers = [clean_number(n) for n in numbers if clean_number(n)]
+
+                    if len(numbers) >= 2:
+                        shares = numbers[0] if numbers[0] > 1 else None
+                        price = None
+                        value = None
+
+                        for n in numbers[1:]:
+                            if 5 <= n <= 1000:
+                                price = n
+                            elif n > 1000:
+                                value = n
+
+                        if shares and (value or price):
+                            if not value and price:
+                                value = round(shares * price, 2)
+
+                            position = {
+                                'symbol': symbol,
+                                'description': '',
+                                'shares': shares,
+                                'price': price,
+                                'value': value
+                            }
+
+                            if not any(p['symbol'] == symbol for p in positions):
+                                positions.append(position)
+                    break
+
+    return positions
+
+
 def parse_csv_file(content):
     """Parse a CSV file from various brokerages."""
     positions = []
@@ -1095,6 +1229,8 @@ def parse_pdf_file(content):
             positions = parse_fidelity_pdf(pdf)
         elif brokerage == 'stifel':
             positions = parse_stifel_pdf(pdf)
+        elif brokerage == 'acropolis':
+            positions = parse_acropolis_pdf(pdf)
         else:
             # Generic text-based parsing
             for page in pdf.pages:
