@@ -27,10 +27,12 @@ import pdfplumber
 # Try to import OCR dependencies for image parsing
 try:
     from PIL import Image
-    import pytesseract
+    import easyocr
+    OCR_READER = None  # Lazy initialization
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
+    OCR_READER = None
 
 from models import db, User, Portfolio, PlaidConnection
 from plaid_client import plaid_client
@@ -1771,16 +1773,34 @@ def parse_pdf_file(content):
 
 def parse_image_file(content):
     """Parse an image file (PNG, JPG) using OCR."""
+    global OCR_READER
+
     if not OCR_AVAILABLE:
-        raise ValueError('OCR not available. Please install pytesseract and Pillow.')
+        raise ValueError('OCR not available. Please install easyocr and Pillow.')
 
     positions = []
+
+    # Lazy initialize OCR reader (it's slow to load)
+    if OCR_READER is None:
+        OCR_READER = easyocr.Reader(['en'], gpu=False)
 
     # Open image from bytes
     image = Image.open(io.BytesIO(content))
 
+    # Convert to RGB if necessary (easyocr needs RGB)
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    # Save to bytes for easyocr
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+
     # Extract text using OCR
-    full_text = pytesseract.image_to_string(image)
+    results = OCR_READER.readtext(img_byte_arr.getvalue())
+
+    # Combine all text results
+    full_text = '\n'.join([result[1] for result in results])
 
     # Detect brokerage from text
     brokerage = detect_brokerage_pdf(full_text)
