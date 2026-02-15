@@ -760,6 +760,8 @@ def detect_brokerage_pdf(text):
         return 'robinhood'
     elif 'stifel' in text_lower or 'lefits' in text_lower:
         return 'stifel'
+    elif 'morgan stanley' in text_lower:
+        return 'morgan_stanley'
     return 'unknown'
 
 
@@ -1133,6 +1135,106 @@ def parse_acropolis_pdf(pdf):
     return positions
 
 
+def parse_morgan_stanley_pdf(pdf):
+    """Parse Morgan Stanley brokerage statement."""
+    positions = []
+
+    # Get all text from the PDF
+    full_text = ""
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        full_text += text + "\n"
+
+    lines = full_text.split('\n')
+
+    # Look for holdings in the "Account Detail" or "MUTUAL FUNDS" section
+    in_holdings_section = False
+
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+
+        # Detect start of holdings section
+        if 'Security Description' in line or 'MUTUAL FUNDS' in line:
+            in_holdings_section = True
+            continue
+
+        # Detect end of holdings section
+        if in_holdings_section and ('TOTAL VALUE' in line or 'ALLOCATION OF ASSETS' in line):
+            in_holdings_section = False
+            continue
+
+        if not in_holdings_section:
+            continue
+
+        # Look for lines with ticker symbols in parentheses like "MSILF GOVERNMENT INST (MVRXX)"
+        ticker_match = re.search(r'\(([A-Z]{3,5}X?)\)', line)
+        if ticker_match:
+            ticker = ticker_match.group(1)
+
+            # Get the description (text before the parentheses)
+            description = line.split('(')[0].strip()
+
+            # Look for numbers on this line or nearby lines
+            numbers = re.findall(r'[\d,]+\.[\d]+', line)
+
+            # Check next few lines for numbers if not found on current line
+            if len(numbers) < 2:
+                for j in range(1, 4):
+                    if i + j < len(lines):
+                        more_nums = re.findall(r'[\d,]+\.[\d]+', lines[i + j])
+                        numbers.extend(more_nums)
+                    if len(numbers) >= 2:
+                        break
+
+            if len(numbers) >= 2:
+                # First number is typically quantity, last is market value
+                shares = clean_number(numbers[0])
+                value = clean_number(numbers[-1])
+
+                # Calculate price if shares > 0
+                price = value / shares if shares > 0 else 1.0
+
+                position = {
+                    'symbol': ticker,
+                    'description': description,
+                    'shares': shares,
+                    'price': round(price, 4),
+                    'value': value
+                }
+
+                # Avoid duplicates
+                if not any(p['symbol'] == ticker for p in positions):
+                    positions.append(position)
+
+        # Also look for money market funds without parentheses (format: SYMBOL followed by numbers)
+        elif 'MSILF' in line or 'MONEY MARKET' in line.upper():
+            # Try to extract symbol from the line
+            words = line_stripped.split()
+            if words:
+                # Look for a word that looks like a ticker (all caps, 3-6 chars)
+                for word in words:
+                    if re.match(r'^[A-Z]{3,6}$', word) and word not in ['THE', 'FOR', 'AND', 'INST']:
+                        ticker = word
+                        numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                        if len(numbers) >= 2:
+                            shares = clean_number(numbers[0])
+                            value = clean_number(numbers[-1])
+                            price = value / shares if shares > 0 else 1.0
+
+                            position = {
+                                'symbol': ticker,
+                                'description': line_stripped[:50],
+                                'shares': shares,
+                                'price': round(price, 4),
+                                'value': value
+                            }
+                            if not any(p['symbol'] == ticker for p in positions):
+                                positions.append(position)
+                        break
+
+    return positions
+
+
 def parse_csv_file(content):
     """Parse a CSV file from various brokerages."""
     positions = []
@@ -1231,6 +1333,8 @@ def parse_pdf_file(content):
             positions = parse_stifel_pdf(pdf)
         elif brokerage == 'acropolis':
             positions = parse_acropolis_pdf(pdf)
+        elif brokerage == 'morgan_stanley':
+            positions = parse_morgan_stanley_pdf(pdf)
         else:
             # Generic text-based parsing
             for page in pdf.pages:
