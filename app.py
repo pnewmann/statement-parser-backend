@@ -460,10 +460,48 @@ ETF_CLASSIFICATIONS = {
     # CASH / MONEY MARKET
     # =========================================================================
     'CASH': {'asset_class': 'Cash', 'sub_class': 'Cash', 'sector': 'Money Market', 'geography': 'US'},
+    # Fidelity Money Market Funds
     'SPAXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
     'FDRXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'FZFXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'SPRXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'FDLXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'FTEXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # Vanguard Money Market Funds
     'VMFXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'VMMXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'VUSXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # Schwab Money Market Funds
     'SWVXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'SNOXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'SNVXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # Morgan Stanley Money Market Funds
+    'MVRXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'MOFXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'MPRXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'MCIXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'MISXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'MPUXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # TD Ameritrade / Other Money Market Funds
+    'TDFXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'TTTXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'GVMXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'Dgovt': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # E*TRADE Money Market Funds
+    'ETGXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # Merrill Lynch / Bank of America
+    'MLAXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # JP Morgan Money Market Funds
+    'MJPXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'JPGXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'CJPXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    'OGVXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # Goldman Sachs Money Market Funds
+    'FGTXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # American Funds Money Market
+    'AFAXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
+    # T. Rowe Price
+    'PRRXX': {'asset_class': 'Cash', 'sub_class': 'Money Market', 'sector': 'Money Market', 'geography': 'US'},
 
     # =========================================================================
     # MAJOR INDIVIDUAL STOCKS
@@ -2141,6 +2179,26 @@ def get_classification(symbol):
 
     if symbol in ETF_CLASSIFICATIONS:
         return ETF_CLASSIFICATIONS[symbol]
+
+    # Pattern-based detection for money market funds (typically end in XX)
+    if len(symbol) == 5 and symbol.endswith('XX'):
+        return {
+            'asset_class': 'Cash',
+            'sub_class': 'Money Market',
+            'sector': 'Money Market',
+            'geography': 'US'
+        }
+
+    # Pattern-based detection for bond funds (often end in X and contain bond-related letters)
+    if len(symbol) >= 4 and symbol.endswith('X') and any(c in symbol for c in ['B', 'T', 'G']):
+        # Could be a bond fund - check for common bond fund patterns
+        if 'BND' in symbol or 'TRS' in symbol or 'GOV' in symbol:
+            return {
+                'asset_class': 'Bonds',
+                'sub_class': 'US Aggregate',
+                'sector': 'Bonds',
+                'geography': 'US'
+            }
 
     # Default classification for unknown symbols (assume US stock)
     return {
