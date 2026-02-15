@@ -995,7 +995,7 @@ def parse_schwab_pdf(pdf):
 
 
 def parse_fidelity_pdf(pdf):
-    """Parse Fidelity brokerage statement."""
+    """Parse Fidelity brokerage statement with proper section detection."""
     positions = []
 
     full_text = ""
@@ -1005,26 +1005,92 @@ def parse_fidelity_pdf(pdf):
 
     lines = full_text.split('\n')
 
-    for line in lines:
-        # Look for known symbols
-        for symbol in KNOWN_SYMBOLS:
-            if symbol in line:
+    # Track which section we're in
+    in_positions_section = False
+    in_core_position = False
+
+    # Fidelity section markers
+    position_start_markers = [
+        'STOCKS', 'EQUITIES', 'EXCHANGE-TRADED FUNDS', 'ETFs',
+        'MUTUAL FUNDS', 'BONDS', 'FIXED INCOME', 'OPTIONS',
+        'Your Holdings', 'Account Holdings', 'Investment Holdings',
+        'Symbol', 'Description'  # Table headers
+    ]
+    position_end_markers = [
+        'ACCOUNT ACTIVITY', 'TRANSACTION', 'DISCLOSURES',
+        'Important Information', 'Account Features', 'Terms and Conditions',
+        'This statement', 'Total Account Value'
+    ]
+
+    for i, line in enumerate(lines):
+        line_upper = line.upper().strip()
+
+        # Check for section start
+        if any(marker.upper() in line_upper for marker in position_start_markers):
+            in_positions_section = True
+            continue
+
+        # Check for section end
+        if any(marker.upper() in line_upper for marker in position_end_markers):
+            in_positions_section = False
+            continue
+
+        # Check for core position (cash/money market sweep)
+        if 'CORE' in line_upper or 'FDIC' in line_upper or 'SPAXX' in line_upper:
+            in_core_position = True
+
+        if not in_positions_section and not in_core_position:
+            # Still try to match clear position patterns outside sections
+            pass
+
+        # Try to match position line: SYMBOL at start followed by numbers
+        match = re.match(r'^([A-Z]{1,5})\s+', line)
+        if match:
+            symbol = match.group(1)
+            if is_valid_symbol(symbol):
                 numbers = re.findall(r'[\d,]+\.[\d]+', line)
                 if len(numbers) >= 2:
-                    position = {
-                        'symbol': symbol,
-                        'description': '',
-                        'shares': clean_number(numbers[0]) if numbers else None,
-                        'price': None,
-                        'value': clean_number(numbers[-1]) if numbers else None
-                    }
+                    shares = clean_number(numbers[0])
+                    value = clean_number(numbers[-1])
 
-                    if position['shares'] and position['value']:
-                        position['price'] = round(position['value'] / position['shares'], 2)
+                    # Validate: shares should be reasonable
+                    if shares and value and shares < 10000000 and value > 0:
+                        position = {
+                            'symbol': symbol,
+                            'description': '',
+                            'shares': shares,
+                            'price': round(value / shares, 2) if shares > 0 else None,
+                            'value': value
+                        }
 
-                    if not any(p['symbol'] == symbol for p in positions):
-                        positions.append(position)
-                break
+                        if not any(p['symbol'] == symbol for p in positions):
+                            positions.append(position)
+                        continue
+
+        # Also check for known symbols mid-line (Fidelity format varies)
+        if in_positions_section:
+            for symbol in KNOWN_SYMBOLS:
+                # Must be a word boundary match, not part of another word
+                if re.search(rf'\b{symbol}\b', line):
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    if len(numbers) >= 2:
+                        shares = clean_number(numbers[0])
+                        value = clean_number(numbers[-1])
+
+                        if shares and value and shares < 10000000:
+                            position = {
+                                'symbol': symbol,
+                                'description': '',
+                                'shares': shares,
+                                'price': round(value / shares, 2) if shares > 0 else None,
+                                'value': value
+                            }
+
+                            if not any(p['symbol'] == symbol for p in positions):
+                                positions.append(position)
+                    break
+
+        in_core_position = False
 
     return positions
 
@@ -1223,7 +1289,7 @@ def parse_acropolis_pdf(pdf):
 
 
 def parse_morgan_stanley_pdf(pdf):
-    """Parse Morgan Stanley brokerage statement."""
+    """Parse Morgan Stanley brokerage statement with all asset types."""
     positions = []
 
     # Get all text from the PDF
@@ -1234,29 +1300,49 @@ def parse_morgan_stanley_pdf(pdf):
 
     lines = full_text.split('\n')
 
-    # Look for holdings in the "Account Detail" or "MUTUAL FUNDS" section
+    # Track section state
     in_holdings_section = False
+    current_section = None
+
+    # Morgan Stanley section markers for different asset types
+    section_start_markers = [
+        'Security Description', 'MUTUAL FUNDS', 'EQUITIES', 'STOCKS',
+        'EXCHANGE TRADED FUNDS', 'ETFs', 'FIXED INCOME', 'BONDS',
+        'Account Detail', 'Your Holdings', 'Investment Summary',
+        'COMMON STOCK', 'PREFERRED STOCK', 'CORPORATE BONDS'
+    ]
+    section_end_markers = [
+        'TOTAL VALUE', 'ALLOCATION OF ASSETS', 'ACCOUNT ACTIVITY',
+        'TRANSACTION HISTORY', 'Important Disclosures', 'Terms and Conditions'
+    ]
 
     for i, line in enumerate(lines):
         line_stripped = line.strip()
+        line_upper = line_stripped.upper()
 
         # Detect start of holdings section
-        if 'Security Description' in line or 'MUTUAL FUNDS' in line:
+        if any(marker.upper() in line_upper for marker in section_start_markers):
             in_holdings_section = True
+            current_section = line_stripped
             continue
 
         # Detect end of holdings section
-        if in_holdings_section and ('TOTAL VALUE' in line or 'ALLOCATION OF ASSETS' in line):
+        if in_holdings_section and any(marker.upper() in line_upper for marker in section_end_markers):
             in_holdings_section = False
+            current_section = None
             continue
 
         if not in_holdings_section:
             continue
 
-        # Look for lines with ticker symbols in parentheses like "MSILF GOVERNMENT INST (MVRXX)"
-        ticker_match = re.search(r'\(([A-Z]{3,5}X?)\)', line)
+        # Method 1: Look for ticker symbols in parentheses like "MSILF GOVERNMENT INST (MVRXX)"
+        ticker_match = re.search(r'\(([A-Z]{2,5}X?)\)', line)
         if ticker_match:
             ticker = ticker_match.group(1)
+
+            # Skip common false positives
+            if ticker in EXCLUDED_WORDS:
+                continue
 
             # Get the description (text before the parentheses)
             description = line.split('(')[0].strip()
@@ -1274,11 +1360,8 @@ def parse_morgan_stanley_pdf(pdf):
                         break
 
             if len(numbers) >= 2:
-                # First number is typically quantity, last is market value
                 shares = clean_number(numbers[0])
                 value = clean_number(numbers[-1])
-
-                # Calculate price if shares > 0
                 price = value / shares if shares > 0 else 1.0
 
                 position = {
@@ -1289,35 +1372,56 @@ def parse_morgan_stanley_pdf(pdf):
                     'value': value
                 }
 
-                # Avoid duplicates
                 if not any(p['symbol'] == ticker for p in positions):
                     positions.append(position)
+            continue
 
-        # Also look for money market funds without parentheses (format: SYMBOL followed by numbers)
-        elif 'MSILF' in line or 'MONEY MARKET' in line.upper():
-            # Try to extract symbol from the line
-            words = line_stripped.split()
-            if words:
-                # Look for a word that looks like a ticker (all caps, 3-6 chars)
-                for word in words:
-                    if re.match(r'^[A-Z]{3,6}$', word) and word not in ['THE', 'FOR', 'AND', 'INST']:
-                        ticker = word
-                        numbers = re.findall(r'[\d,]+\.[\d]+', line)
-                        if len(numbers) >= 2:
-                            shares = clean_number(numbers[0])
-                            value = clean_number(numbers[-1])
-                            price = value / shares if shares > 0 else 1.0
+        # Method 2: Look for symbol at start of line (equities format)
+        match = re.match(r'^([A-Z]{1,5})\s+', line)
+        if match:
+            symbol = match.group(1)
+            if is_valid_symbol(symbol) and symbol not in EXCLUDED_WORDS:
+                numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                if len(numbers) >= 2:
+                    shares = clean_number(numbers[0])
+                    value = clean_number(numbers[-1])
 
-                            position = {
-                                'symbol': ticker,
-                                'description': line_stripped[:50],
-                                'shares': shares,
-                                'price': round(price, 4),
-                                'value': value
-                            }
-                            if not any(p['symbol'] == ticker for p in positions):
-                                positions.append(position)
-                        break
+                    if shares and value and shares < 10000000:
+                        # Extract description between symbol and first number
+                        first_num = re.search(r'[\d,]+\.[\d]+', line)
+                        desc_end = first_num.start() if first_num else len(line)
+                        description = line[len(symbol):desc_end].strip()
+
+                        position = {
+                            'symbol': symbol,
+                            'description': description[:50],
+                            'shares': shares,
+                            'price': round(value / shares, 4) if shares > 0 else None,
+                            'value': value
+                        }
+                        if not any(p['symbol'] == symbol for p in positions):
+                            positions.append(position)
+                    continue
+
+        # Method 3: Look for known symbols anywhere in line (within holdings section)
+        for symbol in KNOWN_SYMBOLS:
+            if re.search(rf'\b{symbol}\b', line):
+                numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                if len(numbers) >= 2:
+                    shares = clean_number(numbers[0])
+                    value = clean_number(numbers[-1])
+
+                    if shares and value and shares < 10000000:
+                        position = {
+                            'symbol': symbol,
+                            'description': '',
+                            'shares': shares,
+                            'price': round(value / shares, 4) if shares > 0 else None,
+                            'value': value
+                        }
+                        if not any(p['symbol'] == symbol for p in positions):
+                            positions.append(position)
+                break
 
     return positions
 
@@ -1423,25 +1527,77 @@ def parse_pdf_file(content):
         elif brokerage == 'morgan_stanley':
             positions = parse_morgan_stanley_pdf(pdf)
         else:
-            # Generic text-based parsing
+            # Generic text-based parsing with section awareness
+            full_text = ""
             for page in pdf.pages:
-                text = page.extract_text() or ""
-                lines = text.split('\n')
+                full_text += (page.extract_text() or "") + "\n"
 
-                for line in lines:
-                    for symbol in KNOWN_SYMBOLS:
-                        if symbol in line:
-                            numbers = re.findall(r'[\d,]+\.[\d]+', line)
-                            if len(numbers) >= 2:
+            lines = full_text.split('\n')
+
+            # Track whether we're in a holdings-like section
+            in_holdings_section = False
+
+            # Generic markers for holdings sections
+            holdings_start = [
+                'holdings', 'positions', 'investments', 'securities',
+                'equities', 'stocks', 'funds', 'etf', 'bonds',
+                'symbol', 'ticker', 'description', 'quantity', 'market value'
+            ]
+            holdings_end = [
+                'transaction', 'activity', 'disclosures', 'terms',
+                'important information', 'notices', 'footnotes'
+            ]
+
+            for line in lines:
+                line_lower = line.lower().strip()
+
+                # Check for section boundaries
+                if any(marker in line_lower for marker in holdings_start):
+                    in_holdings_section = True
+                if any(marker in line_lower for marker in holdings_end):
+                    in_holdings_section = False
+
+                # Method 1: Symbol at start of line with numbers
+                match = re.match(r'^([A-Z]{1,5})\s+', line)
+                if match:
+                    symbol = match.group(1)
+                    if is_valid_symbol(symbol):
+                        numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                        if len(numbers) >= 2:
+                            shares = clean_number(numbers[0])
+                            value = clean_number(numbers[-1])
+                            # Validate reasonable values
+                            if shares and value and shares < 10000000 and value > 0:
                                 position = {
                                     'symbol': symbol,
                                     'description': '',
-                                    'shares': clean_number(numbers[0]),
-                                    'price': None,
-                                    'value': clean_number(numbers[-1])
+                                    'shares': shares,
+                                    'price': round(value / shares, 2) if shares > 0 else None,
+                                    'value': value
                                 }
                                 if not any(p['symbol'] == symbol for p in positions):
                                     positions.append(position)
+                                continue
+
+                # Method 2: Known symbols (only in holdings section to avoid false positives)
+                if in_holdings_section:
+                    for symbol in KNOWN_SYMBOLS:
+                        # Word boundary match to avoid partial matches
+                        if re.search(rf'\b{symbol}\b', line):
+                            numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                            if len(numbers) >= 2:
+                                shares = clean_number(numbers[0])
+                                value = clean_number(numbers[-1])
+                                if shares and value and shares < 10000000:
+                                    position = {
+                                        'symbol': symbol,
+                                        'description': '',
+                                        'shares': shares,
+                                        'price': round(value / shares, 2) if shares > 0 else None,
+                                        'value': value
+                                    }
+                                    if not any(p['symbol'] == symbol for p in positions):
+                                        positions.append(position)
                             break
 
     # Remove duplicates
