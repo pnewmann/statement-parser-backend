@@ -438,6 +438,25 @@ ETF_CLASSIFICATIONS = {
     'ETHE': {'asset_class': 'Crypto', 'sub_class': 'Ethereum', 'sector': 'Cryptocurrency', 'geography': 'Global'},
 
     # =========================================================================
+    # DIRECT CRYPTOCURRENCY (Robinhood, Coinbase, etc.)
+    # =========================================================================
+    'BTC': {'asset_class': 'Crypto', 'sub_class': 'Bitcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'ETH': {'asset_class': 'Crypto', 'sub_class': 'Ethereum', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'SOL': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'DOGE': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'ADA': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'XRP': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'DOT': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'AVAX': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'MATIC': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'LINK': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'LTC': {'asset_class': 'Crypto', 'sub_class': 'Altcoin', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'UNI': {'asset_class': 'Crypto', 'sub_class': 'DeFi', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'AAVE': {'asset_class': 'Crypto', 'sub_class': 'DeFi', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'SHIB': {'asset_class': 'Crypto', 'sub_class': 'Meme', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+    'PEPE': {'asset_class': 'Crypto', 'sub_class': 'Meme', 'sector': 'Cryptocurrency', 'geography': 'Global'},
+
+    # =========================================================================
     # COMMODITY ETFs
     # =========================================================================
     'GLD': {'asset_class': 'Commodities', 'sub_class': 'Gold', 'sector': 'Precious Metals', 'geography': 'Global'},
@@ -670,6 +689,9 @@ KNOWN_SYMBOLS = {
     # Crypto ETFs
     'IBIT', 'ETHA', 'GBTC', 'FBTC', 'ARKB', 'BITB', 'HODL', 'BRRR', 'EZBC',
     'BTCO', 'BTCW', 'DEFI', 'ETHE',
+    # Direct Crypto
+    'BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'AVAX', 'MATIC', 'LINK',
+    'LTC', 'UNI', 'AAVE', 'SHIB', 'PEPE',
     # Sector ETFs
     'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLY', 'XLP', 'XLU', 'XLB', 'XLRE',
     'VGT', 'VFH', 'VDE', 'VHT', 'VIS', 'VCR', 'VDC', 'VPU', 'VAW', 'VNQ',
@@ -1505,6 +1527,132 @@ def parse_csv_file(content):
     return positions
 
 
+def parse_robinhood_pdf(pdf):
+    """Parse Robinhood brokerage/crypto statement."""
+    positions = []
+
+    full_text = ""
+    for page in pdf.pages:
+        text = page.extract_text() or ""
+        full_text += text + "\n"
+
+    lines = full_text.split('\n')
+
+    # Robinhood crypto format: "Bitcoin 0.03962234 BTC $3115.87 100%"
+    # Or table format with headers: CRYPTOCURRENCY HELD IN ACCOUNT | QUANTITY | SYMBOL | MARKET VALUE
+
+    in_crypto_section = False
+    in_stocks_section = False
+
+    # Crypto symbols mapping
+    crypto_names = {
+        'bitcoin': 'BTC', 'ethereum': 'ETH', 'solana': 'SOL', 'dogecoin': 'DOGE',
+        'cardano': 'ADA', 'ripple': 'XRP', 'polkadot': 'DOT', 'avalanche': 'AVAX',
+        'polygon': 'MATIC', 'chainlink': 'LINK', 'litecoin': 'LTC', 'uniswap': 'UNI',
+        'aave': 'AAVE', 'shiba': 'SHIB', 'pepe': 'PEPE'
+    }
+
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        line_lower = line_stripped.lower()
+
+        # Section detection
+        if 'cryptocurrency' in line_lower or 'crypto' in line_lower or 'portfolio allocation' in line_lower:
+            in_crypto_section = True
+            in_stocks_section = False
+            continue
+        if 'stocks' in line_lower or 'equities' in line_lower or 'securities' in line_lower:
+            in_stocks_section = True
+            in_crypto_section = False
+            continue
+        if 'transaction' in line_lower or 'activity' in line_lower or 'disclosures' in line_lower:
+            in_crypto_section = False
+            in_stocks_section = False
+            continue
+
+        # Parse crypto positions
+        if in_crypto_section or 'btc' in line_lower or 'eth' in line_lower:
+            # Method 1: Match "CryptoName Quantity Symbol Value"
+            # Example: "Bitcoin 0.03962234 BTC $3115.87 100%"
+            for crypto_name, symbol in crypto_names.items():
+                if crypto_name in line_lower:
+                    # Extract numbers: quantity and value
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    # Also try to find dollar amounts
+                    dollar_match = re.search(r'\$[\d,]+\.?\d*', line)
+
+                    if numbers:
+                        quantity = clean_number(numbers[0])
+                        value = None
+
+                        if dollar_match:
+                            value = clean_number(dollar_match.group().replace('$', ''))
+                        elif len(numbers) >= 2:
+                            value = clean_number(numbers[-1])
+
+                        if quantity and value:
+                            price = value / quantity if quantity > 0 else value
+
+                            position = {
+                                'symbol': symbol,
+                                'description': crypto_name.title(),
+                                'shares': quantity,
+                                'price': round(price, 2),
+                                'value': value
+                            }
+
+                            if not any(p['symbol'] == symbol for p in positions):
+                                positions.append(position)
+                    break
+
+            # Method 2: Direct symbol match (BTC, ETH, etc.)
+            for symbol in ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'AVAX', 'MATIC', 'LINK', 'LTC']:
+                if re.search(rf'\b{symbol}\b', line):
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    dollar_match = re.search(r'\$[\d,]+\.?\d*', line)
+
+                    if numbers:
+                        quantity = clean_number(numbers[0])
+                        value = None
+
+                        if dollar_match:
+                            value = clean_number(dollar_match.group().replace('$', ''))
+                        elif len(numbers) >= 2:
+                            value = clean_number(numbers[-1])
+
+                        if quantity and value and not any(p['symbol'] == symbol for p in positions):
+                            price = value / quantity if quantity > 0 else value
+                            positions.append({
+                                'symbol': symbol,
+                                'description': symbol,
+                                'shares': quantity,
+                                'price': round(price, 2),
+                                'value': value
+                            })
+                    break
+
+        # Parse stock positions (Robinhood also has stocks)
+        if in_stocks_section:
+            match = re.match(r'^([A-Z]{1,5})\s+', line)
+            if match:
+                symbol = match.group(1)
+                if is_valid_symbol(symbol):
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    if len(numbers) >= 2:
+                        shares = clean_number(numbers[0])
+                        value = clean_number(numbers[-1])
+                        if shares and value and shares < 10000000:
+                            positions.append({
+                                'symbol': symbol,
+                                'description': '',
+                                'shares': shares,
+                                'price': round(value / shares, 2) if shares > 0 else None,
+                                'value': value
+                            })
+
+    return positions
+
+
 def parse_pdf_file(content):
     """Parse a PDF brokerage statement."""
     positions = []
@@ -1526,6 +1674,8 @@ def parse_pdf_file(content):
             positions = parse_acropolis_pdf(pdf)
         elif brokerage == 'morgan_stanley':
             positions = parse_morgan_stanley_pdf(pdf)
+        elif brokerage == 'robinhood':
+            positions = parse_robinhood_pdf(pdf)
         else:
             # Generic text-based parsing with section awareness
             full_text = ""
