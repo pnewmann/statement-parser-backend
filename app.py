@@ -541,6 +541,11 @@ ETF_CLASSIFICATIONS = {
     'MS': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
     'C': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
     'AXP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'BLK': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    'SCHW': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Financials', 'geography': 'US'},
+    # GSEs / Mortgage
+    'FNMA': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Financials', 'geography': 'US'},
+    'FMCC': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Financials', 'geography': 'US'},
 
     # Healthcare
     'UNH': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Healthcare', 'geography': 'US'},
@@ -574,6 +579,13 @@ ETF_CLASSIFICATIONS = {
     'COP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
     'SLB': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
     'EOG': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    # Uranium / Nuclear Energy
+    'UEC': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Energy', 'geography': 'US'},
+    'DNN': {'asset_class': 'Stocks', 'sub_class': 'International Small Cap', 'sector': 'Energy', 'geography': 'Canada'},
+    'NXE': {'asset_class': 'Stocks', 'sub_class': 'International Small Cap', 'sector': 'Energy', 'geography': 'Canada'},
+    'CCJ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Energy', 'geography': 'US'},
+    'UUUU': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Energy', 'geography': 'US'},
+    'LEU': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Energy', 'geography': 'US'},
 
     # Industrials
     'GE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
@@ -585,6 +597,14 @@ ETF_CLASSIFICATIONS = {
     'LMT': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
     'MMM': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
     'DE': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Industrials', 'geography': 'US'},
+    # Packaging / Materials
+    'GPK': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Materials', 'geography': 'US'},
+    'PKG': {'asset_class': 'Stocks', 'sub_class': 'US Mid Cap', 'sector': 'Materials', 'geography': 'US'},
+    'IP': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Materials', 'geography': 'US'},
+    # Tech / Speculative
+    'AEVA': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Technology', 'geography': 'US'},
+    'LAZR': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Technology', 'geography': 'US'},
+    'MVIS': {'asset_class': 'Stocks', 'sub_class': 'US Small Cap', 'sector': 'Technology', 'geography': 'US'},
 
     # Telecom / Utilities
     'VZ': {'asset_class': 'Stocks', 'sub_class': 'US Large Cap', 'sector': 'Communication Services', 'geography': 'US'},
@@ -659,6 +679,18 @@ KNOWN_SYMBOLS = {
     'ADBE', 'NFLX', 'CRM', 'PFE', 'TMO', 'PEP', 'AVGO', 'CSCO', 'ACN',
     'WMT', 'KO', 'MRK', 'ABT', 'CVX', 'XOM', 'LLY', 'ABBV', 'ORCL', 'AMD',
     'INTC', 'QCOM', 'TXN', 'IBM', 'GE', 'CAT', 'BA', 'MMM', 'HON', 'UPS',
+    # Asset managers, financials
+    'BLK', 'SCHW', 'GS', 'MS', 'C', 'WFC', 'USB', 'PNC', 'TFC', 'BK', 'AXP',
+    # Energy/Uranium stocks
+    'UEC', 'DNN', 'NXE', 'CCJ', 'UUUU', 'URG', 'LEU', 'SMR',
+    # GSEs and mortgage companies
+    'FMCC', 'FNMA', 'AGNC', 'NLY', 'STWD', 'BXMT',
+    # Consumer/packaging
+    'GPK', 'PKG', 'IP', 'WRK', 'SEE', 'BLL', 'CCK',
+    # Tech/EV/speculative
+    'AEVA', 'LAZR', 'VLDR', 'INVZ', 'OUST', 'CPTN', 'MVIS', 'LIDR',
+    # ARK ETFs
+    'ARKK', 'ARKW', 'ARKG', 'ARKF', 'ARKQ', 'ARKX', 'PRNT', 'IZRL',
     # Stifel mutual funds
     'COSZX', 'AEPFX', 'FCDIX', 'GFFFX', 'GIBIX', 'LAPIX', 'NFFFX', 'PIGIX',
     'PIMIX', 'PCBIX', 'VSIGX', 'WMFFX',
@@ -813,42 +845,56 @@ def parse_schwab_pdf(pdf):
         text = page.extract_text() or ""
         full_text += text + "\n"
 
-    # Look for ETF positions section
-    # Pattern: SYMBOL DESCRIPTION QUANTITY PRICE MARKETVALUE ...
-    # Example: AGG ISHARESCOREUS ... 273.9131 99.88000 27,358.44
-
     # Split into lines
     lines = full_text.split('\n')
 
+    in_equities_section = False
     in_etf_section = False
     in_cash_section = False
 
     for line in lines:
         # Check for section headers
+        if 'Positions - Equities' in line or ('Equities' in line and 'Symbol' not in line and 'Total' not in line):
+            in_equities_section = True
+            in_etf_section = False
+            in_cash_section = False
+            continue
         if 'Exchange Traded Funds' in line:
             in_etf_section = True
+            in_equities_section = False
             in_cash_section = False
             continue
         if 'Cash and Cash Investments' in line:
             in_cash_section = True
             in_etf_section = False
+            in_equities_section = False
             continue
-        if 'Transaction' in line or 'Positions - Summary' in line:
+        # Exit sections on these markers
+        if 'Transaction' in line and 'Summary' in line:
             in_etf_section = False
+            in_equities_section = False
+            in_cash_section = False
+            continue
+        if 'Positions - Summary' in line:
+            in_etf_section = False
+            in_equities_section = False
             in_cash_section = False
             continue
 
-        # Parse ETF positions
-        if in_etf_section:
+        # Parse position from Equities or ETF sections
+        if in_equities_section or in_etf_section:
             # Skip header lines
             if 'Symbol' in line and 'Description' in line:
                 continue
-            if 'Total' in line and ('Exchange' in line or 'Traded' in line):
+            if 'Total' in line and ('Equities' in line or 'Exchange' in line or 'Traded' in line):
+                in_equities_section = False
+                in_etf_section = False
                 continue
 
             # Try to match position line pattern
-            # Format: SYMBOL DESCRIPTION, QUANTITY PRICE MARKETVALUE ...
-            # Example: AGG ISHARESCOREUS, 111.0000 99.88000 11,086.68
+            # Format: SYMBOL DESCRIPTION QUANTITY PRICE MARKETVALUE ...
+            # Example: BLK BLACKROCK INC NEW 16.0000 1,070.34000 17,125.44
+            # Example: ARKK ARK INNOVATION ETF 62.4988 76.92000 4,807.41
 
             # First, try to match a line starting with a known symbol
             matched = False
@@ -864,14 +910,13 @@ def parse_schwab_pdf(pdf):
                         market_value = clean_number(numbers[2])
 
                         # Extract description: everything between symbol and first number
-                        # Find where the first number starts
                         first_num_match = re.search(r'[\d,]+\.[\d]+', line)
                         if first_num_match:
                             desc_end = first_num_match.start()
                             description = line[len(symbol):desc_end].strip()
-                            # Clean up: remove special chars, trailing commas
+                            # Clean up: remove special chars, trailing commas, (M) markers
+                            description = re.sub(r'\s*\(M\)', '', description)
                             description = re.sub(r'[,◊\(\)]', '', description).strip()
-                            # Split concatenated words
                             description = split_description(description)
                         else:
                             description = ''
@@ -890,8 +935,8 @@ def parse_schwab_pdf(pdf):
 
             # If no known symbol matched, try generic pattern
             if not matched:
-                # Match: 3-5 letter symbol at start, followed by description and numbers
-                match = re.match(r'^([A-Z]{2,5})\s+([A-Za-z0-9\-]+)', line)
+                # Match: 2-5 letter symbol at start, followed by description and numbers
+                match = re.match(r'^([A-Z]{2,5})\s+([A-Za-z0-9\-\s]+)', line)
                 if match:
                     symbol = match.group(1)
                     if is_valid_symbol(symbol):
@@ -906,6 +951,8 @@ def parse_schwab_pdf(pdf):
                             if first_num_match:
                                 desc_end = first_num_match.start()
                                 description = line[len(symbol):desc_end].strip()
+                                # Clean up: remove (M) markers, special chars
+                                description = re.sub(r'\s*\(M\)', '', description)
                                 description = re.sub(r'[,◊\(\)]', '', description).strip()
                                 description = split_description(description)
                             else:
@@ -924,19 +971,21 @@ def parse_schwab_pdf(pdf):
 
         # Parse cash positions
         if in_cash_section:
-            if 'CHARLESSCHWAB' in line.replace(' ', '') or 'SCHWABBANK' in line.replace(' ', ''):
-                if 'Total' in line:
+            # Look for cash line - can be "Cash" at start of line or include Schwab Bank
+            line_stripped = line.strip()
+            if line_stripped.startswith('Cash') or 'CHARLESSCHWAB' in line.replace(' ', '') or 'SCHWABBANK' in line.replace(' ', ''):
+                if 'Total' in line or 'Investments' in line:
                     continue
-                # Extract the ending balance
+                # Extract numbers - looking for ending balance
                 numbers = re.findall(r'[\d,]+\.[\d]{2}', line)
                 if len(numbers) >= 2:
-                    # Second number is usually ending balance
+                    # For "Cash , 1,489.55 1,520.27 ..." format, second number is ending balance
                     ending_balance = clean_number(numbers[1])
                     if ending_balance and ending_balance > 0:
                         if not any(p['symbol'] == 'CASH' for p in positions):
                             positions.append({
                                 'symbol': 'CASH',
-                                'description': 'Charles Schwab Bank Sweep',
+                                'description': 'Cash and Cash Investments',
                                 'shares': None,
                                 'price': None,
                                 'value': round(ending_balance, 2)
