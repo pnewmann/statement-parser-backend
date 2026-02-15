@@ -24,6 +24,14 @@ from flask_jwt_extended import (
 import bcrypt
 import pdfplumber
 
+# Try to import OCR dependencies for image parsing
+try:
+    from PIL import Image
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
 from models import db, User, Portfolio, PlaidConnection
 from plaid_client import plaid_client
 
@@ -1761,6 +1769,149 @@ def parse_pdf_file(content):
     return unique_positions, brokerage
 
 
+def parse_image_file(content):
+    """Parse an image file (PNG, JPG) using OCR."""
+    if not OCR_AVAILABLE:
+        raise ValueError('OCR not available. Please install pytesseract and Pillow.')
+
+    positions = []
+
+    # Open image from bytes
+    image = Image.open(io.BytesIO(content))
+
+    # Extract text using OCR
+    full_text = pytesseract.image_to_string(image)
+
+    # Detect brokerage from text
+    brokerage = detect_brokerage_pdf(full_text)
+
+    lines = full_text.split('\n')
+
+    # Track section state
+    in_holdings_section = False
+
+    # Crypto symbols mapping for Robinhood-style statements
+    crypto_names = {
+        'bitcoin': 'BTC', 'ethereum': 'ETH', 'solana': 'SOL', 'dogecoin': 'DOGE',
+        'cardano': 'ADA', 'ripple': 'XRP', 'polkadot': 'DOT', 'avalanche': 'AVAX',
+        'polygon': 'MATIC', 'chainlink': 'LINK', 'litecoin': 'LTC', 'uniswap': 'UNI'
+    }
+
+    # Section markers
+    holdings_start = [
+        'holdings', 'positions', 'investments', 'securities', 'cryptocurrency',
+        'portfolio allocation', 'equities', 'stocks', 'funds', 'etf', 'bonds',
+        'symbol', 'quantity', 'market value'
+    ]
+    holdings_end = [
+        'transaction', 'activity', 'disclosures', 'terms',
+        'important information', 'this statement is provided'
+    ]
+
+    for line in lines:
+        line_stripped = line.strip()
+        line_lower = line_stripped.lower()
+
+        # Check for section boundaries
+        if any(marker in line_lower for marker in holdings_start):
+            in_holdings_section = True
+        if any(marker in line_lower for marker in holdings_end):
+            in_holdings_section = False
+
+        # Parse crypto positions (common in Robinhood screenshots)
+        for crypto_name, symbol in crypto_names.items():
+            if crypto_name in line_lower:
+                numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                dollar_match = re.search(r'\$[\d,]+\.?\d*', line)
+
+                if numbers:
+                    quantity = clean_number(numbers[0])
+                    value = None
+
+                    if dollar_match:
+                        value = clean_number(dollar_match.group().replace('$', ''))
+                    elif len(numbers) >= 2:
+                        value = clean_number(numbers[-1])
+
+                    if quantity and value:
+                        price = value / quantity if quantity > 0 else value
+                        if not any(p['symbol'] == symbol for p in positions):
+                            positions.append({
+                                'symbol': symbol,
+                                'description': crypto_name.title(),
+                                'shares': quantity,
+                                'price': round(price, 2),
+                                'value': value
+                            })
+                break
+
+        # Parse direct crypto symbols (BTC, ETH, etc.)
+        for symbol in ['BTC', 'ETH', 'SOL', 'DOGE', 'ADA', 'XRP', 'DOT', 'AVAX', 'MATIC', 'LINK', 'LTC']:
+            if re.search(rf'\b{symbol}\b', line):
+                numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                dollar_match = re.search(r'\$[\d,]+\.?\d*', line)
+
+                if numbers:
+                    quantity = clean_number(numbers[0])
+                    value = None
+
+                    if dollar_match:
+                        value = clean_number(dollar_match.group().replace('$', ''))
+                    elif len(numbers) >= 2:
+                        value = clean_number(numbers[-1])
+
+                    if quantity and value and not any(p['symbol'] == symbol for p in positions):
+                        price = value / quantity if quantity > 0 else value
+                        positions.append({
+                            'symbol': symbol,
+                            'description': symbol,
+                            'shares': quantity,
+                            'price': round(price, 2),
+                            'value': value
+                        })
+                break
+
+        # Parse stock/ETF positions
+        if in_holdings_section:
+            match = re.match(r'^([A-Z]{1,5})\s+', line)
+            if match:
+                symbol = match.group(1)
+                if is_valid_symbol(symbol):
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    if len(numbers) >= 2:
+                        shares = clean_number(numbers[0])
+                        value = clean_number(numbers[-1])
+                        if shares and value and shares < 10000000:
+                            if not any(p['symbol'] == symbol for p in positions):
+                                positions.append({
+                                    'symbol': symbol,
+                                    'description': '',
+                                    'shares': shares,
+                                    'price': round(value / shares, 2) if shares > 0 else None,
+                                    'value': value
+                                })
+
+            # Also check for known symbols mid-line
+            for symbol in KNOWN_SYMBOLS:
+                if re.search(rf'\b{symbol}\b', line):
+                    numbers = re.findall(r'[\d,]+\.[\d]+', line)
+                    if len(numbers) >= 2:
+                        shares = clean_number(numbers[0])
+                        value = clean_number(numbers[-1])
+                        if shares and value and shares < 10000000:
+                            if not any(p['symbol'] == symbol for p in positions):
+                                positions.append({
+                                    'symbol': symbol,
+                                    'description': '',
+                                    'shares': shares,
+                                    'price': round(value / shares, 2) if shares > 0 else None,
+                                    'value': value
+                                })
+                    break
+
+    return positions, brokerage
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
@@ -2504,8 +2655,12 @@ def parse_statement():
             brokerage = 'csv'
         elif filename.endswith('.pdf'):
             positions, brokerage = parse_pdf_file(content)
+        elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            if not OCR_AVAILABLE:
+                return jsonify({'error': 'Image parsing not available. Please upload a PDF or CSV file.'}), 400
+            positions, brokerage = parse_image_file(content)
         else:
-            return jsonify({'error': 'Unsupported file type. Please upload a PDF or CSV file.'}), 400
+            return jsonify({'error': 'Unsupported file type. Please upload a PDF, CSV, or image file (PNG, JPG).'}), 400
 
         if not positions:
             return jsonify({
