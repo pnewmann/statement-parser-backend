@@ -24,15 +24,16 @@ from flask_jwt_extended import (
 import bcrypt
 import pdfplumber
 
-# Try to import OCR dependencies for image parsing
+# OCR is now handled client-side with Tesseract.js
+# Keeping PIL for any image processing needs
 try:
     from PIL import Image
-    import easyocr
-    OCR_READER = None  # Lazy initialization
-    OCR_AVAILABLE = True
+    PIL_AVAILABLE = True
 except ImportError:
-    OCR_AVAILABLE = False
-    OCR_READER = None
+    PIL_AVAILABLE = False
+
+OCR_AVAILABLE = False  # OCR moved to client-side
+OCR_READER = None
 
 from models import db, User, Portfolio, PlaidConnection
 from plaid_client import plaid_client
