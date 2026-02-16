@@ -756,6 +756,208 @@ DESCRIPTION_WORDS = [
     'PRTFL', 'PORTFL', 'MTS', 'MARKT', 'INFPROT', 'SHRT', 'INF', 'PROT',
 ]
 
+# =============================================================================
+# CLEARING FIRM FINGERPRINTS
+# Many brokerages use clearing firms which have standardized statement formats
+# =============================================================================
+
+CLEARING_FIRM_FINGERPRINTS = {
+    'pershing': {
+        'patterns': [
+            'pershing llc', 'pershing advisor solutions', 'bny mellon',
+            'pershing x', 'pershing netx360', 'clearing through pershing'
+        ],
+        'statement_format': 'pershing',
+        'brokerages': ['advisor_generic', 'ria_generic']
+    },
+    'nfs': {  # National Financial Services (Fidelity's clearing arm)
+        'patterns': [
+            'national financial services', 'nfs llc', 'fidelity clearing',
+            'cleared through nfs', 'fidelity brokerage services'
+        ],
+        'statement_format': 'fidelity',
+        'brokerages': ['fidelity', 'advisor_generic']
+    },
+    'apex': {
+        'patterns': [
+            'apex clearing', 'apex clearing corporation', 'cleared by apex',
+            'apex fintech solutions'
+        ],
+        'statement_format': 'apex',
+        'brokerages': ['webull', 'sofi', 'public', 'tastyworks', 'm1_finance', 'firstrade']
+    },
+    'schwab': {
+        'patterns': [
+            'charles schwab & co', 'schwab clearing', 'td ameritrade clearing'
+        ],
+        'statement_format': 'schwab',
+        'brokerages': ['schwab', 'tdameritrade']
+    },
+    'rqd': {  # Raymond James
+        'patterns': [
+            'raymond james', 'rj & associates', 'raymond james financial'
+        ],
+        'statement_format': 'raymond_james',
+        'brokerages': ['raymond_james']
+    },
+    'vanguard': {
+        'patterns': [
+            'vanguard brokerage services', 'vanguard marketing corporation'
+        ],
+        'statement_format': 'vanguard',
+        'brokerages': ['vanguard']
+    },
+    'interactive_brokers': {
+        'patterns': [
+            'interactive brokers llc', 'ibkr', 'ib llc', 'timber hill'
+        ],
+        'statement_format': 'ibkr',
+        'brokerages': ['interactive_brokers']
+    }
+}
+
+# Enhanced column aliases for CSV parsing
+COLUMN_ALIASES = {
+    'symbol': [
+        'symbol', 'ticker', 'sym', 'stock symbol', 'security symbol',
+        'instrument', 'ticker symbol', 'fund symbol', 'etf symbol',
+        'financial instrument', 'cusip', 'isin', 'sedol'
+    ],
+    'description': [
+        'description', 'security', 'name', 'security name', 'security description',
+        'company', 'company name', 'fund name', 'holding name', 'instrument name',
+        'investment', 'investment name', 'asset', 'asset name', 'position',
+        'holding description', 'security desc'
+    ],
+    'shares': [
+        'quantity', 'shares', 'units', 'qty', 'holdings', 'position',
+        'share balance', 'unit balance', 'units owned', 'shares owned',
+        'quantity held', 'balance', 'units held', 'share quantity',
+        'current quantity', 'ending quantity', 'total shares', 'total units',
+        'closing balance', 'ending balance'
+    ],
+    'price': [
+        'price', 'last price', 'closing price', 'market price', 'current price',
+        'unit price', 'share price', 'last', 'close', 'closing', 'mkt price',
+        'price per share', 'nav', 'net asset value', 'quote', 'last quote',
+        'price/share', 'cost basis per share'
+    ],
+    'value': [
+        'value', 'market value', 'total value', 'current value', 'amount',
+        'balance', 'market val', 'mkt value', 'mkt val', 'position value',
+        'total market value', 'ending value', 'account value', 'fair value',
+        'fmv', 'fair market value', 'worth', 'total', 'total amount',
+        'ending market value', 'current market value'
+    ],
+    'cost_basis': [
+        'cost basis', 'cost', 'average cost', 'avg cost', 'purchase price',
+        'acquisition cost', 'book value', 'tax basis', 'total cost',
+        'original cost', 'cost per share', 'unit cost', 'adjusted cost basis'
+    ],
+    'gain_loss': [
+        'gain/loss', 'gain loss', 'unrealized gain', 'unrealized loss',
+        'unrealized g/l', 'p&l', 'profit loss', 'change', 'total gain',
+        'total return', 'unrealized p/l', 'return', 'appreciation'
+    ],
+    'account': [
+        'account', 'account number', 'acct', 'account #', 'acct #',
+        'account id', 'portfolio', 'account name', 'registration'
+    ],
+    'sector': [
+        'sector', 'industry', 'gics sector', 'industry sector',
+        'classification', 'asset class', 'category', 'type'
+    ]
+}
+
+# CUSIP to ticker mapping for common securities
+# This helps when statements only provide CUSIP codes
+COMMON_CUSIPS = {
+    # Popular ETFs
+    '78462F103': 'SPY',    # SPDR S&P 500
+    '922908363': 'VTI',    # Vanguard Total Stock Market
+    '922908769': 'VOO',    # Vanguard S&P 500
+    '46434V100': 'IVV',    # iShares Core S&P 500
+    '464287200': 'IJH',    # iShares Core S&P Mid-Cap
+    '464287622': 'IJR',    # iShares Core S&P Small-Cap
+    '78464A870': 'QQQ',    # Invesco QQQ Trust
+    '922908355': 'VEA',    # Vanguard FTSE Developed Markets
+    '922908793': 'VWO',    # Vanguard FTSE Emerging Markets
+    '922908645': 'BND',    # Vanguard Total Bond Market
+    '46434V407': 'AGG',    # iShares Core US Aggregate Bond
+    '922908728': 'VXUS',   # Vanguard Total International Stock
+    '921937835': 'VNQ',    # Vanguard Real Estate
+    '78468R101': 'SCHD',   # Schwab US Dividend Equity
+    '46090E103': 'IEFA',   # iShares Core MSCI EAFE
+    '46434G103': 'IEMG',   # iShares Core MSCI Emerging Markets
+
+    # Popular stocks
+    '037833100': 'AAPL',   # Apple
+    '594918104': 'MSFT',   # Microsoft
+    '02079K305': 'GOOGL',  # Alphabet Class A
+    '02079K107': 'GOOG',   # Alphabet Class C
+    '023135106': 'AMZN',   # Amazon
+    '88160R101': 'TSLA',   # Tesla
+    '30303M102': 'META',   # Meta Platforms
+    '67066G104': 'NVDA',   # NVIDIA
+    '11135F101': 'AVGO',   # Broadcom
+    '46625H100': 'JPM',    # JPMorgan Chase
+    '46647P100': 'JNJ',    # Johnson & Johnson
+    '91324P102': 'UNH',    # UnitedHealth
+    '94106L109': 'WMT',    # Walmart
+    '5949181045': 'MSFT',  # Microsoft (alternate)
+    '30231G102': 'XOM',    # Exxon Mobil
+    '78378X107': 'CVX',    # Chevron
+    '713448108': 'PEP',    # PepsiCo
+    '191216100': 'KO',     # Coca-Cola
+    '742718109': 'PG',     # Procter & Gamble
+    '172967424': 'C',      # Citigroup
+    '060505104': 'BAC',    # Bank of America
+    '38141G104': 'GS',     # Goldman Sachs
+}
+
+
+def detect_clearing_firm(text):
+    """Detect which clearing firm processed the statement."""
+    text_lower = text.lower()
+
+    for firm_id, firm_data in CLEARING_FIRM_FINGERPRINTS.items():
+        for pattern in firm_data['patterns']:
+            if pattern in text_lower:
+                return {
+                    'clearing_firm': firm_id,
+                    'statement_format': firm_data['statement_format'],
+                    'possible_brokerages': firm_data['brokerages']
+                }
+
+    return None
+
+
+def cusip_to_ticker(cusip):
+    """Convert CUSIP to ticker symbol if known."""
+    if not cusip:
+        return None
+    # Remove any whitespace and standardize
+    cusip = cusip.strip().upper().replace(' ', '').replace('-', '')
+    # CUSIPs are 9 characters, but some formats omit the check digit
+    if len(cusip) == 8:
+        # Try both with and without check digit
+        for suffix in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+            full_cusip = cusip + suffix
+            if full_cusip in COMMON_CUSIPS:
+                return COMMON_CUSIPS[full_cusip]
+    return COMMON_CUSIPS.get(cusip)
+
+
+def match_column(header, column_type):
+    """Check if a header matches any alias for a column type."""
+    if column_type not in COLUMN_ALIASES:
+        return False
+    header_lower = header.lower().strip()
+    for alias in COLUMN_ALIASES[column_type]:
+        if alias in header_lower or header_lower in alias:
+            return True
+    return False
+
 
 def split_description(text):
     """Split concatenated description into readable words."""
@@ -843,28 +1045,216 @@ def is_valid_symbol(text):
     return True
 
 
+# =============================================================================
+# OFX/QFX PARSER
+# Open Financial Exchange format used by many brokerages for downloads
+# =============================================================================
+
+def parse_ofx_file(content):
+    """
+    Parse OFX/QFX file format (Open Financial Exchange).
+    This format is commonly offered as a download option by:
+    - Vanguard, Fidelity, Schwab, E*TRADE, TD Ameritrade
+    - Quicken-compatible exports from most brokerages
+    """
+    positions = []
+    brokerage = 'ofx'
+
+    if isinstance(content, bytes):
+        # Try different encodings
+        for encoding in ['utf-8', 'latin-1', 'cp1252']:
+            try:
+                content = content.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+
+    # Detect brokerage from OFX header
+    content_lower = content.lower()
+    if 'vanguard' in content_lower:
+        brokerage = 'vanguard'
+    elif 'fidelity' in content_lower:
+        brokerage = 'fidelity'
+    elif 'schwab' in content_lower:
+        brokerage = 'schwab'
+    elif 'ameritrade' in content_lower:
+        brokerage = 'tdameritrade'
+    elif 'e*trade' in content_lower or 'etrade' in content_lower:
+        brokerage = 'etrade'
+
+    # Parse stock positions from INVPOSLIST
+    # OFX uses SGML-like tags
+    pos_pattern = r'<POSSTOCK>(.*?)</POSSTOCK>|<POSMF>(.*?)</POSMF>|<POSOTHER>(.*?)</POSOTHER>|<POSOPT>(.*?)</POSOPT>'
+    pos_matches = re.findall(pos_pattern, content, re.IGNORECASE | re.DOTALL)
+
+    for match_tuple in pos_matches:
+        # Get the non-empty match from the tuple
+        pos_content = next((m for m in match_tuple if m), '')
+        if not pos_content:
+            continue
+
+        position = {}
+
+        # Extract SECID (security identifier)
+        secid_match = re.search(r'<SECID>(.*?)</SECID>', pos_content, re.IGNORECASE | re.DOTALL)
+        if secid_match:
+            secid_content = secid_match.group(1)
+            # Get UNIQUEID (usually CUSIP)
+            uniqueid = re.search(r'<UNIQUEID>([^<]+)', secid_content, re.IGNORECASE)
+            uniqueidtype = re.search(r'<UNIQUEIDTYPE>([^<]+)', secid_content, re.IGNORECASE)
+
+            if uniqueid:
+                cusip_or_ticker = uniqueid.group(1).strip()
+                id_type = uniqueidtype.group(1).strip().upper() if uniqueidtype else 'CUSIP'
+
+                if id_type == 'CUSIP':
+                    # Try to convert CUSIP to ticker
+                    ticker = cusip_to_ticker(cusip_or_ticker)
+                    if ticker:
+                        position['symbol'] = ticker
+                    else:
+                        position['symbol'] = cusip_or_ticker  # Use CUSIP as fallback
+                        position['cusip'] = cusip_or_ticker
+                else:
+                    position['symbol'] = cusip_or_ticker
+
+        # Extract units/shares
+        units_match = re.search(r'<UNITS>([^<]+)', pos_content, re.IGNORECASE)
+        if units_match:
+            position['shares'] = clean_number(units_match.group(1))
+
+        # Extract unit price
+        price_match = re.search(r'<UNITPRICE>([^<]+)', pos_content, re.IGNORECASE)
+        if price_match:
+            position['price'] = clean_number(price_match.group(1))
+
+        # Extract market value
+        mktval_match = re.search(r'<MKTVAL>([^<]+)', pos_content, re.IGNORECASE)
+        if mktval_match:
+            position['value'] = clean_number(mktval_match.group(1))
+
+        # Calculate value if not present
+        if not position.get('value') and position.get('shares') and position.get('price'):
+            position['value'] = position['shares'] * position['price']
+
+        if position.get('symbol') and (position.get('shares') or position.get('value')):
+            position['description'] = position.get('symbol', '')
+            positions.append(position)
+
+    # Also look for security info to get descriptions
+    seclist_pattern = r'<SECINFO>(.*?)</SECINFO>'
+    sec_matches = re.findall(seclist_pattern, content, re.IGNORECASE | re.DOTALL)
+
+    sec_descriptions = {}
+    for sec_content in sec_matches:
+        uniqueid = re.search(r'<UNIQUEID>([^<]+)', sec_content, re.IGNORECASE)
+        secname = re.search(r'<SECNAME>([^<]+)', sec_content, re.IGNORECASE)
+        ticker = re.search(r'<TICKER>([^<]+)', sec_content, re.IGNORECASE)
+
+        if uniqueid:
+            uid = uniqueid.group(1).strip()
+            sec_descriptions[uid] = {
+                'name': secname.group(1).strip() if secname else '',
+                'ticker': ticker.group(1).strip() if ticker else ''
+            }
+
+    # Update positions with descriptions and tickers from SECLIST
+    for pos in positions:
+        symbol = pos.get('symbol', '')
+        cusip = pos.get('cusip', symbol)
+
+        if cusip in sec_descriptions:
+            sec_info = sec_descriptions[cusip]
+            if sec_info['name']:
+                pos['description'] = sec_info['name']
+            if sec_info['ticker'] and not pos.get('symbol'):
+                pos['symbol'] = sec_info['ticker']
+            elif sec_info['ticker']:
+                # Replace CUSIP with actual ticker if available
+                pos['symbol'] = sec_info['ticker']
+
+    return positions, brokerage
+
+
 def detect_brokerage_pdf(text):
-    """Detect which brokerage the PDF is from."""
+    """Detect which brokerage the PDF is from using multiple fingerprints."""
     text_lower = text.lower()
+
+    # Check for clearing firm first (helps identify statement format)
+    clearing_info = detect_clearing_firm(text)
+
     # Check Acropolis/retirement plans FIRST (they contain Vanguard fund names)
     if 'acropolis' in text_lower or ('profit sharing plan' in text_lower and 'your market value' in text_lower):
         return 'acropolis'
-    elif 'charles schwab' in text_lower or 'schwab' in text_lower:
+
+    # Major brokerages
+    if 'charles schwab' in text_lower or 'schwab' in text_lower:
         return 'schwab'
-    elif 'fidelity' in text_lower:
+    if 'fidelity' in text_lower or 'fmr llc' in text_lower:
         return 'fidelity'
-    elif 'vanguard' in text_lower:
+    if 'vanguard' in text_lower:
         return 'vanguard'
-    elif 'td ameritrade' in text_lower:
+    if 'td ameritrade' in text_lower or 'thinkorswim' in text_lower:
         return 'tdameritrade'
-    elif 'e*trade' in text_lower or 'etrade' in text_lower:
+    if 'e*trade' in text_lower or 'etrade' in text_lower:
         return 'etrade'
-    elif 'robinhood' in text_lower:
+    if 'robinhood' in text_lower:
         return 'robinhood'
-    elif 'stifel' in text_lower or 'lefits' in text_lower:
+    if 'stifel' in text_lower or 'lefits' in text_lower:
         return 'stifel'
-    elif 'morgan stanley' in text_lower:
+    if 'morgan stanley' in text_lower:
         return 'morgan_stanley'
+
+    # Additional brokerages with fingerprints
+    if 'interactive brokers' in text_lower or 'ibkr' in text_lower:
+        return 'interactive_brokers'
+    if 'merrill' in text_lower or 'merrill lynch' in text_lower or 'merrill edge' in text_lower:
+        return 'merrill'
+    if 'wells fargo' in text_lower or 'wellstrade' in text_lower:
+        return 'wells_fargo'
+    if 'webull' in text_lower:
+        return 'webull'
+    if 'sofi' in text_lower or 'social finance' in text_lower:
+        return 'sofi'
+    if 'public.com' in text_lower or 'public investing' in text_lower:
+        return 'public'
+    if 'tastyworks' in text_lower or 'tastytrade' in text_lower:
+        return 'tastyworks'
+    if 'm1 finance' in text_lower or 'm1finance' in text_lower:
+        return 'm1_finance'
+    if 'firstrade' in text_lower:
+        return 'firstrade'
+    if 'ally invest' in text_lower:
+        return 'ally'
+    if 'betterment' in text_lower:
+        return 'betterment'
+    if 'wealthfront' in text_lower:
+        return 'wealthfront'
+    if 'raymond james' in text_lower:
+        return 'raymond_james'
+    if 'edward jones' in text_lower:
+        return 'edward_jones'
+    if 'ubs' in text_lower and ('financial' in text_lower or 'wealth' in text_lower):
+        return 'ubs'
+    if 'jp morgan' in text_lower or 'jpmorgan' in text_lower or 'chase private client' in text_lower:
+        return 'jpmorgan'
+    if 'goldman sachs' in text_lower or 'marcus' in text_lower:
+        return 'goldman'
+    if 'citibank' in text_lower or 'citi personal wealth' in text_lower:
+        return 'citi'
+    if 'usaa' in text_lower:
+        return 'usaa'
+    if 'tiaa' in text_lower:
+        return 'tiaa'
+
+    # Apex clearing firm brokerages (common format)
+    if clearing_info and clearing_info['clearing_firm'] == 'apex':
+        return 'apex_cleared'
+
+    # Pershing clearing firm (common RIA format)
+    if clearing_info and clearing_info['clearing_firm'] == 'pershing':
+        return 'pershing_cleared'
+
     return 'unknown'
 
 
@@ -1459,12 +1849,175 @@ def parse_morgan_stanley_pdf(pdf):
     return positions
 
 
-def parse_csv_file(content):
-    """Parse a CSV file from various brokerages."""
+def detect_csv_format(content):
+    """Detect the CSV format/brokerage based on content patterns."""
+    content_lower = content.lower()
+
+    # IBKR format detection
+    if 'statement,' in content_lower or 'interactive brokers' in content_lower:
+        return 'ibkr'
+    if 'header,field name' in content_lower:
+        return 'ibkr'
+
+    # Fidelity format
+    if 'account name/number' in content_lower and 'symbol' in content_lower:
+        return 'fidelity'
+
+    # Schwab format
+    if 'schwab' in content_lower or 'positions_' in content_lower:
+        return 'schwab'
+
+    # Vanguard format
+    if 'vanguard' in content_lower:
+        return 'vanguard'
+
+    # TD Ameritrade format
+    if 'thinkorswim' in content_lower or 'td ameritrade' in content_lower:
+        return 'tdameritrade'
+
+    return 'generic'
+
+
+def parse_ibkr_csv(content):
+    """
+    Parse Interactive Brokers multi-section CSV format.
+    IBKR CSVs have multiple sections separated by blank lines,
+    each section starting with a header row.
+    """
     positions = []
 
     if isinstance(content, bytes):
         content = content.decode('utf-8-sig')
+
+    lines = content.split('\n')
+    current_section = None
+    header_row = None
+    header_indices = {}
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Skip empty lines
+        if not line:
+            current_section = None
+            header_row = None
+            header_indices = {}
+            i += 1
+            continue
+
+        # Parse row
+        try:
+            reader = csv.reader(io.StringIO(line))
+            row = next(reader)
+        except:
+            i += 1
+            continue
+
+        if not row:
+            i += 1
+            continue
+
+        # Check if this is a section marker
+        first_cell = row[0].strip().lower()
+
+        # IBKR section markers
+        if first_cell in ['statement', 'account information', 'positions', 'trades', 'open positions', 'mark-to-market', 'cash report']:
+            current_section = first_cell
+            i += 1
+            continue
+
+        # Check if this is a header row (contains common header words)
+        row_lower = [cell.lower().strip() for cell in row]
+        is_header = any(word in ' '.join(row_lower) for word in ['symbol', 'description', 'quantity', 'position', 'market value'])
+
+        if is_header and (current_section in ['positions', 'open positions'] or 'position' in ' '.join(row_lower)):
+            header_row = row
+            header_indices = {}
+
+            # Map columns using enhanced aliases
+            for idx, col in enumerate(row):
+                col_lower = col.lower().strip()
+                if match_column(col, 'symbol'):
+                    header_indices['symbol'] = idx
+                elif match_column(col, 'description'):
+                    header_indices['description'] = idx
+                elif match_column(col, 'shares'):
+                    header_indices['shares'] = idx
+                elif match_column(col, 'price'):
+                    header_indices['price'] = idx
+                elif match_column(col, 'value'):
+                    header_indices['value'] = idx
+                elif match_column(col, 'cost_basis'):
+                    header_indices['cost_basis'] = idx
+
+            i += 1
+            continue
+
+        # Process data rows if we have a header
+        if header_row and header_indices.get('symbol') is not None:
+            symbol = None
+            symbol_idx = header_indices.get('symbol')
+
+            if symbol_idx is not None and symbol_idx < len(row):
+                symbol_val = str(row[symbol_idx]).strip().upper()
+                # Check if it's a CUSIP
+                if len(symbol_val) == 9 and symbol_val.isalnum():
+                    ticker = cusip_to_ticker(symbol_val)
+                    symbol = ticker if ticker else symbol_val
+                elif is_valid_symbol(symbol_val):
+                    symbol = symbol_val
+
+            if symbol:
+                position = {'symbol': symbol}
+
+                desc_idx = header_indices.get('description')
+                if desc_idx is not None and desc_idx < len(row):
+                    position['description'] = str(row[desc_idx]).strip()
+                else:
+                    position['description'] = symbol
+
+                shares_idx = header_indices.get('shares')
+                if shares_idx is not None and shares_idx < len(row):
+                    position['shares'] = clean_number(row[shares_idx])
+
+                price_idx = header_indices.get('price')
+                if price_idx is not None and price_idx < len(row):
+                    position['price'] = clean_number(row[price_idx])
+
+                value_idx = header_indices.get('value')
+                if value_idx is not None and value_idx < len(row):
+                    position['value'] = clean_number(row[value_idx])
+
+                cost_idx = header_indices.get('cost_basis')
+                if cost_idx is not None and cost_idx < len(row):
+                    position['cost_basis'] = clean_number(row[cost_idx])
+
+                # Calculate value if not present
+                if not position.get('value') and position.get('shares') and position.get('price'):
+                    position['value'] = position['shares'] * position['price']
+
+                if position.get('shares') or position.get('value'):
+                    positions.append(position)
+
+        i += 1
+
+    return positions
+
+
+def parse_csv_file(content):
+    """Parse a CSV file from various brokerages using enhanced column detection."""
+    positions = []
+
+    if isinstance(content, bytes):
+        content = content.decode('utf-8-sig')
+
+    # Detect format
+    csv_format = detect_csv_format(content)
+
+    # Use specialized parser for IBKR
+    if csv_format == 'ibkr':
+        return parse_ibkr_csv(content)
 
     reader = csv.reader(io.StringIO(content))
     rows = list(reader)
@@ -1472,13 +2025,15 @@ def parse_csv_file(content):
     if not rows:
         return positions
 
-    # Find header row
+    # Find header row - look for rows containing position-related headers
     header_row = None
     header_index = 0
 
     for i, row in enumerate(rows):
-        row_lower = [str(cell).lower() for cell in row]
-        if any(h in row_lower for h in ['symbol', 'ticker', 'security']):
+        row_text = ' '.join([str(cell).lower() for cell in row])
+        # Check for common header indicators
+        if any(alias in row_text for alias in COLUMN_ALIASES['symbol']) or \
+           any(alias in row_text for alias in COLUMN_ALIASES['shares']):
             header_row = row
             header_index = i
             break
@@ -1487,39 +2042,61 @@ def parse_csv_file(content):
         header_row = rows[0]
         header_index = 0
 
-    header_lower = [str(h).lower().strip() for h in header_row]
-
+    # Map columns using enhanced aliases
     symbol_idx = None
     desc_idx = None
     shares_idx = None
     price_idx = None
     value_idx = None
+    cost_idx = None
 
-    for i, h in enumerate(header_lower):
-        if any(x in h for x in ['symbol', 'ticker']):
+    for i, h in enumerate(header_row):
+        h_lower = str(h).lower().strip()
+        if match_column(h, 'symbol') and symbol_idx is None:
             symbol_idx = i
-        elif any(x in h for x in ['description', 'security', 'name']):
+        elif match_column(h, 'description') and desc_idx is None:
             desc_idx = i
-        elif any(x in h for x in ['quantity', 'shares', 'units']):
+        elif match_column(h, 'shares') and shares_idx is None:
             shares_idx = i
-        elif any(x in h for x in ['price', 'last']):
+        elif match_column(h, 'price') and price_idx is None:
             price_idx = i
-        elif any(x in h for x in ['value', 'market value', 'amount', 'balance']):
+        elif match_column(h, 'value') and value_idx is None:
             value_idx = i
+        elif match_column(h, 'cost_basis') and cost_idx is None:
+            cost_idx = i
 
     for row in rows[header_index + 1:]:
-        if len(row) <= max(filter(None, [symbol_idx, desc_idx, shares_idx, price_idx, value_idx]), default=0):
+        if len(row) == 0:
+            continue
+
+        max_idx = max(filter(None, [symbol_idx, desc_idx, shares_idx, price_idx, value_idx, cost_idx]), default=0)
+        if len(row) <= max_idx:
             continue
 
         symbol = None
         if symbol_idx is not None and symbol_idx < len(row):
-            symbol = str(row[symbol_idx]).strip().upper()
+            symbol_val = str(row[symbol_idx]).strip().upper()
 
+            # Check if it looks like a CUSIP (9 alphanumeric characters)
+            if len(symbol_val) == 9 and symbol_val.isalnum():
+                ticker = cusip_to_ticker(symbol_val)
+                symbol = ticker if ticker else symbol_val
+            else:
+                symbol = symbol_val
+
+        # If no valid symbol found, scan the row
         if not symbol or not is_valid_symbol(symbol):
             for cell in row:
-                if is_valid_symbol(str(cell).strip()):
-                    symbol = str(cell).strip().upper()
+                cell_str = str(cell).strip()
+                if is_valid_symbol(cell_str):
+                    symbol = cell_str.upper()
                     break
+                # Also check for CUSIP
+                if len(cell_str) == 9 and cell_str.isalnum():
+                    ticker = cusip_to_ticker(cell_str)
+                    if ticker:
+                        symbol = ticker
+                        break
 
         if not symbol or not is_valid_symbol(symbol):
             continue
@@ -1531,6 +2108,13 @@ def parse_csv_file(content):
             'price': clean_number(row[price_idx]) if price_idx is not None and price_idx < len(row) else None,
             'value': clean_number(row[value_idx]) if value_idx is not None and value_idx < len(row) else None,
         }
+
+        if cost_idx is not None and cost_idx < len(row):
+            position['cost_basis'] = clean_number(row[cost_idx])
+
+        # Calculate value if missing but we have shares and price
+        if not position.get('value') and position.get('shares') and position.get('price'):
+            position['value'] = position['shares'] * position['price']
 
         if position['shares'] or position['value']:
             positions.append(position)
@@ -2673,7 +3257,12 @@ def parse_statement():
     try:
         if filename.endswith('.csv'):
             positions = parse_csv_file(content)
-            brokerage = 'csv'
+            # Try to detect brokerage from CSV content
+            csv_format = detect_csv_format(content if isinstance(content, str) else content.decode('utf-8-sig', errors='ignore'))
+            brokerage = csv_format if csv_format != 'generic' else 'csv'
+        elif filename.endswith(('.ofx', '.qfx')):
+            # OFX/QFX format (Open Financial Exchange / Quicken)
+            positions, brokerage = parse_ofx_file(content)
         elif filename.endswith('.pdf'):
             positions, brokerage = parse_pdf_file(content)
         elif filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
@@ -2681,7 +3270,7 @@ def parse_statement():
                 return jsonify({'error': 'Image parsing not available. Please upload a PDF or CSV file.'}), 400
             positions, brokerage = parse_image_file(content)
         else:
-            return jsonify({'error': 'Unsupported file type. Please upload a PDF, CSV, or image file (PNG, JPG).'}), 400
+            return jsonify({'error': 'Unsupported file type. Please upload a PDF, CSV, OFX, QFX, or image file (PNG, JPG).'}), 400
 
         if not positions:
             return jsonify({
