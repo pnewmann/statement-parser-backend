@@ -757,6 +757,93 @@ DESCRIPTION_WORDS = [
 ]
 
 # =============================================================================
+# CRYPTO SYMBOL MAPPING FOR YFINANCE
+# Maps portfolio crypto symbols to yfinance ticker symbols
+# =============================================================================
+
+CRYPTO_YFINANCE_SYMBOLS = {
+    'BTC': 'BTC-USD',
+    'ETH': 'ETH-USD',
+    'SOL': 'SOL-USD',
+    'DOGE': 'DOGE-USD',
+    'ADA': 'ADA-USD',
+    'XRP': 'XRP-USD',
+    'DOT': 'DOT-USD',
+    'AVAX': 'AVAX-USD',
+    'MATIC': 'MATIC-USD',
+    'LINK': 'LINK-USD',
+    'LTC': 'LTC-USD',
+    'UNI': 'UNI-USD',
+    'AAVE': 'AAVE-USD',
+    'SHIB': 'SHIB-USD',
+    'PEPE': 'PEPE-USD',
+    'ATOM': 'ATOM-USD',
+    'XLM': 'XLM-USD',
+    'NEAR': 'NEAR-USD',
+    'APT': 'APT-USD',
+    'ARB': 'ARB-USD',
+    'OP': 'OP-USD',
+    'SUI': 'SUI-USD',
+    'SEI': 'SEI-USD',
+    'INJ': 'INJ-USD',
+    'RNDR': 'RNDR-USD',
+    'FET': 'FET-USD',
+    'FIL': 'FIL-USD',
+    'ICP': 'ICP-USD',
+    'HBAR': 'HBAR-USD',
+    'VET': 'VET-USD',
+    'ALGO': 'ALGO-USD',
+    'SAND': 'SAND-USD',
+    'MANA': 'MANA-USD',
+    'AXS': 'AXS-USD',
+    'CRO': 'CRO-USD',
+    'MKR': 'MKR-USD',
+    'SNX': 'SNX-USD',
+    'COMP': 'COMP-USD',
+    'YFI': 'YFI-USD',
+    'SUSHI': 'SUSHI-USD',
+    'CAKE': 'CAKE-USD',
+    'BNB': 'BNB-USD',
+    'TRX': 'TRX-USD',
+    'ETC': 'ETC-USD',
+    'XMR': 'XMR-USD',
+    'ZEC': 'ZEC-USD',
+    'DASH': 'DASH-USD',
+    'BCH': 'BCH-USD',
+    'EOS': 'EOS-USD',
+    'XTZ': 'XTZ-USD',
+    'THETA': 'THETA-USD',
+    'EGLD': 'EGLD-USD',
+    'FTM': 'FTM-USD',
+    'FLOW': 'FLOW-USD',
+    'ONE': 'ONE-USD',
+    'KLAY': 'KLAY-USD',
+    'GALA': 'GALA-USD',
+    'ENJ': 'ENJ-USD',
+    'CHZ': 'CHZ-USD',
+    'BAT': 'BAT-USD',
+    'ZRX': 'ZRX-USD',
+    'LRC': 'LRC-USD',
+    'IMX': 'IMX-USD',
+    'APE': 'APE-USD',
+    'BONK': 'BONK-USD',
+    'WIF': 'WIF-USD',
+    'FLOKI': 'FLOKI-USD',
+}
+
+
+def get_yfinance_symbol(symbol):
+    """Convert portfolio symbol to yfinance symbol (handles crypto)."""
+    if not symbol:
+        return symbol
+    symbol_upper = symbol.upper().strip()
+    # Check if it's a known crypto symbol
+    if symbol_upper in CRYPTO_YFINANCE_SYMBOLS:
+        return CRYPTO_YFINANCE_SYMBOLS[symbol_upper]
+    return symbol_upper
+
+
+# =============================================================================
 # CLEARING FIRM FINGERPRINTS
 # Many brokerages use clearing firms which have standardized statement formats
 # =============================================================================
@@ -3464,9 +3551,17 @@ def calculate_risk_metrics(positions):
 
         symbols = list(weights.keys())
 
+        # Map portfolio symbols to yfinance symbols (handles crypto like BTC -> BTC-USD)
+        symbol_mapping = {}  # original -> yfinance
+        yf_symbols = []
+        for sym in symbols:
+            yf_sym = get_yfinance_symbol(sym)
+            symbol_mapping[sym] = yf_sym
+            yf_symbols.append(yf_sym)
+
         # Download price data
         data = yf.download(
-            symbols + ['SPY'],  # Include SPY for beta calculation
+            yf_symbols + ['SPY'],  # Include SPY for beta calculation
             start=start_date,
             end=end_date,
             progress=False,
@@ -3485,7 +3580,7 @@ def calculate_risk_metrics(positions):
         # Handle single symbol case - ensure data is a DataFrame
         if isinstance(data, pd.Series):
             data = data.to_frame()
-            data.columns = symbols + ['SPY'] if 'SPY' in symbols else [symbols[0]]
+            data.columns = yf_symbols + ['SPY'] if 'SPY' not in yf_symbols else [yf_symbols[0]]
 
         # Calculate daily returns
         returns = data.pct_change().dropna()
@@ -3501,8 +3596,10 @@ def calculate_risk_metrics(positions):
         # Calculate portfolio returns
         portfolio_returns = pd.Series(0, index=returns.index)
         for symbol, weight in weights.items():
-            if symbol in returns.columns:
-                portfolio_returns += returns[symbol] * weight
+            # Use the mapped yfinance symbol to look up returns
+            yf_symbol = symbol_mapping.get(symbol, symbol)
+            if yf_symbol in returns.columns:
+                portfolio_returns += returns[yf_symbol] * weight
 
         # Annualized volatility (std dev)
         volatility = float(portfolio_returns.std() * np.sqrt(252) * 100)
@@ -3581,11 +3678,19 @@ def calculate_historical_performance(positions):
 
         symbols = list(weights.keys())
 
+        # Map portfolio symbols to yfinance symbols (handles crypto like BTC -> BTC-USD)
+        symbol_mapping = {}  # original -> yfinance
+        yf_symbols = []
+        for sym in symbols:
+            yf_sym = get_yfinance_symbol(sym)
+            symbol_mapping[sym] = yf_sym
+            yf_symbols.append(yf_sym)
+
         # Benchmarks: S&P 500, Total Bond, Total World, 60/40 will be calculated
         benchmark_symbols = ['SPY', 'AGG', 'VT']
 
         # Download price data for portfolio and benchmarks
-        all_symbols = list(set(symbols + benchmark_symbols))
+        all_symbols = list(set(yf_symbols + benchmark_symbols))
         data = yf.download(
             all_symbols,
             start=start_date,
@@ -3614,8 +3719,10 @@ def calculate_historical_performance(positions):
         # Calculate portfolio returns (weighted)
         portfolio_returns = pd.Series(0.0, index=returns.index)
         for symbol, weight in weights.items():
-            if symbol in returns.columns:
-                symbol_returns = returns[symbol].fillna(0)
+            # Use the mapped yfinance symbol to look up returns
+            yf_symbol = symbol_mapping.get(symbol, symbol)
+            if yf_symbol in returns.columns:
+                symbol_returns = returns[yf_symbol].fillna(0)
                 portfolio_returns += symbol_returns * weight
         # Cash portion earns ~5% annual
         if cash_weight > 0:
