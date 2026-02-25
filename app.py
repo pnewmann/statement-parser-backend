@@ -37,6 +37,7 @@ OCR_READER = None
 
 from models import db, User, Portfolio, PlaidConnection
 from plaid_client import plaid_client
+from ai_insights import generate_ai_insights
 
 # Try to import yfinance, pandas, numpy for risk metrics
 try:
@@ -4664,6 +4665,16 @@ def analyze_portfolio():
             allocations, concentration, risk_metrics, classified_positions, projections
         )
 
+        # Generate AI-powered insights (gracefully returns [] if unavailable)
+        ai_insights = generate_ai_insights({
+            'positions': classified_positions,
+            'total_value': allocations['total_value'],
+            'asset_allocation': allocations['asset_allocation'],
+            'sector_exposure': allocations['sector_exposure'],
+            'concentration': concentration,
+            'geography': allocations['geography'],
+        })
+
         return jsonify({
             'positions': classified_positions,
             'total_value': allocations['total_value'],
@@ -4678,7 +4689,8 @@ def analyze_portfolio():
             'historical_performance': historical_performance,
             'scenario_analysis': scenario_analysis,
             'projections': projections,
-            'insights': insights
+            'insights': insights,
+            'ai_insights': ai_insights
         })
 
     except Exception as e:
