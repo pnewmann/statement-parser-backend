@@ -7,6 +7,7 @@ Requires ANTHROPIC_API_KEY environment variable to be set in the Render dashboar
 
 import os
 import json
+import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,17 @@ def generate_ai_insights(portfolio_data):
         )
 
         response_text = message.content[0].text
+
+        # Strip markdown code fences and any surrounding text
+        fence_match = re.search(r'```(?:json)?\s*(\[[\s\S]*?\])\s*```', response_text)
+        if fence_match:
+            response_text = fence_match.group(1)
+        else:
+            # Try to extract a bare JSON array from the response
+            array_match = re.search(r'\[[\s\S]*\]', response_text)
+            if array_match:
+                response_text = array_match.group(0)
+
         insights = json.loads(response_text)
 
         # Validate structure
