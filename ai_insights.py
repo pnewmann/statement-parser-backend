@@ -74,17 +74,23 @@ def generate_ai_insights(portfolio_data):
         )
 
         response_text = message.content[0].text
+        logger.info("Claude raw response for AI insights:\n%s", response_text)
 
         # Strip markdown code fences and any surrounding text
         fence_match = re.search(r'```(?:json)?\s*(\[[\s\S]*?\])\s*```', response_text)
         if fence_match:
+            logger.info("Extracted JSON from markdown code fence")
             response_text = fence_match.group(1)
         else:
             # Try to extract a bare JSON array from the response
             array_match = re.search(r'\[[\s\S]*\]', response_text)
             if array_match:
+                logger.info("Extracted bare JSON array from response")
                 response_text = array_match.group(0)
+            else:
+                logger.warning("No JSON array found in response")
 
+        logger.debug("Cleaned response text for parsing:\n%s", response_text)
         insights = json.loads(response_text)
 
         # Validate structure
@@ -99,8 +105,9 @@ def generate_ai_insights(portfolio_data):
                 })
         return validated
 
-    except json.JSONDecodeError:
-        logger.warning("Claude returned non-JSON response for AI insights")
+    except json.JSONDecodeError as e:
+        logger.warning("Claude returned non-JSON response for AI insights: %s", e)
+        logger.warning("Response text that failed parsing:\n%s", response_text)
         return []
     except Exception as e:
         logger.warning(f"AI insights generation failed: {e}")
